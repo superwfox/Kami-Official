@@ -10,7 +10,9 @@
 | `logo`   | 回复一张 png 图片（`config.yml` 中的 `logoUrl`）  |
 | `官网`   | 回复 Markdown + 三个链接按钮（官网导航）          |
 
-> QQ 公域群机器人只能在被 **@机器人** 时收到群消息，因此指令需以 `@机器人 报时` 的形式触发。
+> 群里需 **@机器人** 触发（如 `@机器人 报时`）；**单聊(C2C)** 直接发送指令即可。
+> 群 @ 消息与单聊消息走同一套指令逻辑（`MessageHandler.handleCommand`），仅接口路径不同：
+> 群用 `/v2/groups/{group_openid}/...`，单聊用 `/v2/users/{user_openid}/...`。
 
 ## 目录结构
 
@@ -56,7 +58,8 @@ java -jar target/kami-qqbot.jar /path/to/config.yml
 - **网关**：`GET /gateway` 拿到 wss 地址后连接，先收 `op:10 Hello`，随后发送
   `op:2 Identify`（`intents = 1<<25`，即 `GROUP_AND_C2C_EVENT`），并按
   `heartbeat_interval` 周期发送 `op:1` 心跳。
-- **收消息**：监听 `GROUP_AT_MESSAGE_CREATE` 事件。
+- **收消息**：监听 `GROUP_AT_MESSAGE_CREATE`（群 @）与 `C2C_MESSAGE_CREATE`（单聊）事件，
+  二者都包含在 `GROUP_AND_C2C_EVENT`（`1<<25`）这一 intent 内。
 - **发文本**：`POST /v2/groups/{group_openid}/messages`，`msg_type=0`，带上收到的
   `msg_id` 作被动回复（5 分钟内、最多 5 条）。
 - **发图片**：先 `POST /v2/groups/{group_openid}/files`（`file_type=1`、`url=图片直链`）

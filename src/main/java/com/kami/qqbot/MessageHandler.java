@@ -9,9 +9,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 业务逻辑：处理群 @ 消息。
+ * 业务逻辑：处理群 @ 消息与单聊(C2C)消息，指令相同。
  *   报时  -> 回复 UTC+8 时间 + 时间戳
  *   logo  -> 回复 png 图片
+ *   官网  -> 回复 Markdown + 链接按钮
  */
 public class MessageHandler {
 
@@ -28,7 +29,17 @@ public class MessageHandler {
     public void onEvent(String type, JsonObject d) {
         try {
             if ("GROUP_AT_MESSAGE_CREATE".equals(type)) {
-                handleGroupAtMessage(d);
+                // 群 @ 消息
+                String groupOpenid = d.get("group_openid").getAsString();
+                handleCommand(d, "群:" + groupOpenid,
+                        "/v2/groups/" + groupOpenid + "/messages",
+                        "/v2/groups/" + groupOpenid + "/files");
+            } else if ("C2C_MESSAGE_CREATE".equals(type)) {
+                // 单聊消息
+                String userOpenid = d.getAsJsonObject("author").get("user_openid").getAsString();
+                handleCommand(d, "单聊:" + userOpenid,
+                        "/v2/users/" + userOpenid + "/messages",
+                        "/v2/users/" + userOpenid + "/files");
             }
         } catch (Exception e) {
             System.err.println("[MSG] 处理事件失败: " + e.getMessage());
@@ -36,24 +47,24 @@ public class MessageHandler {
         }
     }
 
-    private void handleGroupAtMessage(JsonObject d) throws Exception {
+    /** 群与单聊共用的指令处理；差异仅在消息/文件接口路径。 */
+    private void handleCommand(JsonObject d, String source, String messagesPath, String filesPath) throws Exception {
         String content = d.has("content") ? d.get("content").getAsString().trim() : "";
-        String groupOpenid = d.get("group_openid").getAsString();
         String msgId = d.get("id").getAsString();
-        System.out.println("[MSG] 群消息 group=" + groupOpenid + " content=[" + content + "]");
+        System.out.println("[MSG] " + source + " content=[" + content + "]");
 
         if (content.equals("报时")) {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.ofHours(8));
             String formatted = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             long timestamp = now.toInstant().getEpochSecond();
             String text = "🕗 北京时间(UTC+8)：" + formatted + "\n时间戳：" + timestamp;
-            api.sendGroupText(groupOpenid, text, msgId, seqGen.getAndIncrement());
+            api.sendText(messagesPath, text, msgId, seqGen.getAndIncrement());
 
         } else if (content.equalsIgnoreCase("logo")) {
             // 1) 先上传图片拿到 file_info
-            String fileInfo = api.uploadGroupMedia(groupOpenid, config.logoUrl, 1);
+            String fileInfo = api.uploadMedia(filesPath, config.logoUrl, 1);
             // 2) 再以富媒体消息发送
-            api.sendGroupMedia(groupOpenid, fileInfo, msgId, seqGen.getAndIncrement());
+            api.sendMedia(messagesPath, fileInfo, msgId, seqGen.getAndIncrement());
 
         } else if (content.equals("官网")) {
             JsonObject markdown = new JsonObject();
@@ -69,7 +80,7 @@ public class MessageHandler {
             JsonObject keyboard = new JsonObject();
             keyboard.add("content", keyboardContent);
 
-            api.sendGroupMarkdown(groupOpenid, markdown, keyboard, msgId, seqGen.getAndIncrement());
+            api.sendMarkdown(messagesPath, markdown, keyboard, msgId, seqGen.getAndIncrement());
         }
     }
 

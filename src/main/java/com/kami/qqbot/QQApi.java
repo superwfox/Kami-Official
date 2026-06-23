@@ -97,27 +97,32 @@ public class QQApi {
         return json.get("url").getAsString();
     }
 
-    /** 回复群文本消息。msg_type=0。 */
-    public void sendGroupText(String groupOpenid, String content, String msgId, int msgSeq) throws Exception {
+    // 下面这组接口对「群」和「单聊(C2C)」是同构的，只是路径不同：
+    //   群:   messagesPath=/v2/groups/{group_openid}/messages  filesPath=/v2/groups/{group_openid}/files
+    //   单聊: messagesPath=/v2/users/{user_openid}/messages     filesPath=/v2/users/{user_openid}/files
+    // 因此统一用 path 参数化，由调用方拼好路径。
+
+    /** 回复文本消息。msg_type=0。 */
+    public void sendText(String messagesPath, String content, String msgId, int msgSeq) throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("content", content);
         body.addProperty("msg_type", 0);
         body.addProperty("msg_id", msgId);
         body.addProperty("msg_seq", msgSeq);
-        post("/v2/groups/" + groupOpenid + "/messages", body);
+        post(messagesPath, body);
     }
 
     /**
-     * 上传群富媒体并返回 file_info。
+     * 上传富媒体并返回 file_info。
      * fileType: 1=图片 2=视频 3=语音 4=文件。
      * 注意：群/C2C 富媒体目前仅支持通过 url 上传，file_data(base64) 官方暂未开放。
      */
-    public String uploadGroupMedia(String groupOpenid, String url, int fileType) throws Exception {
+    public String uploadMedia(String filesPath, String url, int fileType) throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("file_type", fileType);
         body.addProperty("url", url);
         body.addProperty("srv_send_msg", false);
-        String resp = post("/v2/groups/" + groupOpenid + "/files", body);
+        String resp = post(filesPath, body);
         JsonObject json = JsonParser.parseString(resp).getAsJsonObject();
         if (!json.has("file_info")) {
             throw new RuntimeException("上传富媒体失败: " + resp);
@@ -126,13 +131,13 @@ public class QQApi {
     }
 
     /**
-     * 回复群 Markdown + 按钮消息。msg_type=2。
+     * 回复 Markdown + 按钮消息。msg_type=2。
      * markdown / keyboard 为已构造好的 JSON 节点（keyboard 可为 null）。
      * 注意：公域机器人发送原生 Markdown / 内联按钮需在开放平台申请权限并报备，
      * 且链接按钮的跳转域名需加入白名单，否则会报无权限或无法跳转。
      */
-    public void sendGroupMarkdown(String groupOpenid, JsonObject markdown, JsonObject keyboard,
-                                  String msgId, int msgSeq) throws Exception {
+    public void sendMarkdown(String messagesPath, JsonObject markdown, JsonObject keyboard,
+                             String msgId, int msgSeq) throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("msg_type", 2);
         body.add("markdown", markdown);
@@ -141,11 +146,11 @@ public class QQApi {
         }
         body.addProperty("msg_id", msgId);
         body.addProperty("msg_seq", msgSeq);
-        post("/v2/groups/" + groupOpenid + "/messages", body);
+        post(messagesPath, body);
     }
 
-    /** 回复群富媒体消息。msg_type=7。 */
-    public void sendGroupMedia(String groupOpenid, String fileInfo, String msgId, int msgSeq) throws Exception {
+    /** 回复富媒体消息。msg_type=7。 */
+    public void sendMedia(String messagesPath, String fileInfo, String msgId, int msgSeq) throws Exception {
         JsonObject media = new JsonObject();
         media.addProperty("file_info", fileInfo);
 
@@ -155,7 +160,7 @@ public class QQApi {
         body.add("media", media);
         body.addProperty("msg_id", msgId);
         body.addProperty("msg_seq", msgSeq);
-        post("/v2/groups/" + groupOpenid + "/messages", body);
+        post(messagesPath, body);
     }
 
     private String post(String path, JsonObject body) throws Exception {
