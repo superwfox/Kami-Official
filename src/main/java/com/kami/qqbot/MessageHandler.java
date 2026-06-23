@@ -1,5 +1,6 @@
 package com.kami.qqbot;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.time.ZoneOffset;
@@ -53,6 +54,50 @@ public class MessageHandler {
             String fileInfo = api.uploadGroupMedia(groupOpenid, config.logoUrl, 1);
             // 2) 再以富媒体消息发送
             api.sendGroupMedia(groupOpenid, fileInfo, msgId, seqGen.getAndIncrement());
+
+        } else if (content.equals("官网")) {
+            JsonObject markdown = new JsonObject();
+            markdown.addProperty("content", "**官网导航**\n点击下方按钮前往对应站点：");
+
+            JsonArray rows = new JsonArray();
+            rows.add(buttonRow("1", "泰坦陨落", "https://ttdm.space"));
+            rows.add(buttonRow("2", "服务器文档", "https://doc.oasis.monster"));
+            rows.add(buttonRow("3", "踏海｜MC开发工具", "https://tahai.xyz"));
+
+            JsonObject keyboardContent = new JsonObject();
+            keyboardContent.add("rows", rows);
+            JsonObject keyboard = new JsonObject();
+            keyboard.add("content", keyboardContent);
+
+            api.sendGroupMarkdown(groupOpenid, markdown, keyboard, msgId, seqGen.getAndIncrement());
         }
+    }
+
+    /** 构造仅含一个链接按钮的按钮行。 */
+    private JsonObject buttonRow(String id, String label, String url) {
+        JsonObject renderData = new JsonObject();
+        renderData.addProperty("label", label);
+        renderData.addProperty("visited_label", label);
+        renderData.addProperty("style", 1); // 1=蓝色线框
+
+        JsonObject permission = new JsonObject();
+        permission.addProperty("type", 2); // 2=所有人可点击
+
+        JsonObject action = new JsonObject();
+        action.addProperty("type", 0);     // 0=跳转按钮(链接/scheme)
+        action.add("permission", permission);
+        action.addProperty("data", url);
+        action.addProperty("unsupport_tips", "请升级QQ客户端");
+
+        JsonObject button = new JsonObject();
+        button.addProperty("id", id);
+        button.add("render_data", renderData);
+        button.add("action", action);
+
+        JsonArray buttons = new JsonArray();
+        buttons.add(button);
+        JsonObject row = new JsonObject();
+        row.add("buttons", buttons);
+        return row;
     }
 }

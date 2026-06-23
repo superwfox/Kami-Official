@@ -8,6 +8,7 @@
 | -------- | ------------------------------------------------- |
 | `报时`   | 回复 UTC+8（北京时间）的格式化时间 + 秒级时间戳   |
 | `logo`   | 回复一张 png 图片（`config.yml` 中的 `logoUrl`）  |
+| `官网`   | 回复 Markdown + 三个链接按钮（官网导航）          |
 
 > QQ 公域群机器人只能在被 **@机器人** 时收到群消息，因此指令需以 `@机器人 报时` 的形式触发。
 
@@ -76,17 +77,35 @@ java -jar target/kami-qqbot.jar /path/to/config.yml
   原生 Markdown / 内联按钮也需要申请相应权限，否则接口会报无权限。
 - 按钮的回调（用户点击）通过 `INTERACTION_CREATE` 互动事件回传，需要额外处理。
 
-本仓库为最简测试版，未内置该功能；如需可在 `QQApi` 中新增
-`sendGroupMarkdown(...)`，body 形如：
+本仓库已内置一个示例：群里 @机器人 发送 **`官网`** 会回复一条
+Markdown + 三个链接按钮的消息（见 `QQApi.sendGroupMarkdown` 与
+`MessageHandler.buttonRow`），body 形如：
 
 ```json
 {
   "msg_type": 2,
   "msg_id": "...",
-  "markdown": { "content": "**标题**\n正文" },
-  "keyboard": { "content": { "rows": [ { "buttons": [ /* ... */ ] } ] } }
+  "msg_seq": 1,
+  "markdown": { "content": "**官网导航**\n点击下方按钮前往对应站点：" },
+  "keyboard": {
+    "content": {
+      "rows": [
+        { "buttons": [ {
+          "id": "1",
+          "render_data": { "label": "泰坦陨落", "visited_label": "泰坦陨落", "style": 1 },
+          "action": { "type": 0, "permission": { "type": 2 }, "data": "https://ttdm.space",
+                      "unsupport_tips": "请升级QQ客户端" }
+        } ] }
+      ]
+    }
+  }
 }
 ```
+
+> ⚠️ 该消息能否成功发出 / 按钮能否跳转，取决于开放平台权限：公域机器人需
+> **申请原生 Markdown + 内联按钮权限**，链接按钮的跳转域名（ttdm.space /
+> doc.oasis.monster / tahai.xyz）需加入 **跳转链接白名单**，否则接口会报无权限
+> 或点击无法跳转。`action.type=0` 为跳转按钮，`permission.type=2` 表示所有人可点击。
 
 ### 2. 能否 base64 编码消息再发送文件？
 

@@ -125,6 +125,25 @@ public class QQApi {
         return json.get("file_info").getAsString();
     }
 
+    /**
+     * 回复群 Markdown + 按钮消息。msg_type=2。
+     * markdown / keyboard 为已构造好的 JSON 节点（keyboard 可为 null）。
+     * 注意：公域机器人发送原生 Markdown / 内联按钮需在开放平台申请权限并报备，
+     * 且链接按钮的跳转域名需加入白名单，否则会报无权限或无法跳转。
+     */
+    public void sendGroupMarkdown(String groupOpenid, JsonObject markdown, JsonObject keyboard,
+                                  String msgId, int msgSeq) throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("msg_type", 2);
+        body.add("markdown", markdown);
+        if (keyboard != null) {
+            body.add("keyboard", keyboard);
+        }
+        body.addProperty("msg_id", msgId);
+        body.addProperty("msg_seq", msgSeq);
+        post("/v2/groups/" + groupOpenid + "/messages", body);
+    }
+
     /** 回复群富媒体消息。msg_type=7。 */
     public void sendGroupMedia(String groupOpenid, String fileInfo, String msgId, int msgSeq) throws Exception {
         JsonObject media = new JsonObject();
