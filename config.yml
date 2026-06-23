@@ -1,0 +1,16 @@
+# ============================================================
+#  QQ 官方机器人配置
+#  在 https://q.qq.com/ 「开发设置」中获取 AppID / AppSecret
+# ============================================================
+
+# 机器人 AppID
+appId: "你的AppID"
+
+# 机器人 AppSecret（也就是 ClientSecret）
+clientSecret: "你的AppSecret"
+
+# 是否使用沙箱环境（调试用）。正式发布请设为 false
+sandbox: false
+
+# 收到 “logo” 时发送的图片地址（必须是公网可访问的直链）
+logoUrl: "https://github.com/superwfox/minecraft-dev/blob/master/public/silver.png?raw=true"
