@@ -47,6 +47,16 @@
 
     <build>
         <finalName>kami-qqbot</finalName>
+        <resources>
+            <!-- 默认 resources（如有） -->
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- 把 public 下的字体(raw.ttf)与泰坦图标打进 jar 根，渲染时走 classpath 读取 -->
+            <resource>
+                <directory>public</directory>
+            </resource>
+        </resources>
         <plugins>
             <!-- 打成可直接运行的 fat-jar -->
             <plugin>

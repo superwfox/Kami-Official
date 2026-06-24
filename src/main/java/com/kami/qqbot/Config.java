@@ -17,6 +17,13 @@ public class Config {
     public boolean sandbox;
     public String logoUrl;
 
+    /** TTDM 数据查询接口域名（战绩/榜单）。 */
+    public String ttdmApiBase;
+    /** 渲染所需静态资源目录（字体 / 泰坦图标 / banner）。 */
+    public String assetDir;
+    /** 卡片超采样倍率，越大越清晰、越大越慢。 */
+    public int renderScale;
+
     public static Config load(String path) throws Exception {
         Yaml yaml = new Yaml();
         try (InputStream in = Files.newInputStream(Path.of(path))) {
@@ -30,7 +37,11 @@ public class Config {
             c.sandbox = Boolean.parseBoolean(str(data.getOrDefault("sandbox", "false")));
             c.logoUrl = str(data.getOrDefault("logoUrl",
                     "https://github.com/superwfox/minecraft-dev/blob/master/public/silver.png?raw=true"));
+            c.ttdmApiBase = str(data.getOrDefault("ttdmApiBase", "https://ttdm.space"));
+            c.assetDir = str(data.getOrDefault("assetDir", "public"));
+            c.renderScale = Integer.parseInt(str(data.getOrDefault("renderScale", "2")));
             return c;
+
         }
     }
 

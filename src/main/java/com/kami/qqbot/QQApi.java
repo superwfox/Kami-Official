@@ -8,7 +8,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -107,6 +110,24 @@ public class QQApi {
     }
 
     /**
+     * 上传本地媒体（base64 直传），返回 file_info。
+     * fileType: 1=图片 2=视频 3=语音 4=文件。
+     * data 为媒体原始字节，内部做 base64（纯串，不带 data: 前缀、无换行）塞进 file_data。
+     */
+    public String uploadMediaData(String filesPath, byte[] data, int fileType) throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("file_type", fileType);
+        body.addProperty("file_data", Base64.getEncoder().encodeToString(data));
+        body.addProperty("srv_send_msg", false);
+        return require(post(filesPath, body), "file_info", "上传富媒体失败");
+    }
+
+    /** uploadMediaData 的便捷重载：直接读本地文件路径。 */
+    public String uploadMediaFile(String filesPath, Path file, int fileType) throws Exception {
+        return uploadMediaData(filesPath, Files.readAllBytes(file), fileType);
+    }
+
+    /**
      * 回复 Markdown + 按钮消息。msg_type=2。
      * markdown / keyboard 为已构造好的 JSON 节点（keyboard 可为 null）。
      * 注意：公域机器人发送原生 Markdown / 内联按钮需在开放平台申请权限并报备，
@@ -125,8 +146,28 @@ public class QQApi {
         post(messagesPath, body);
     }
 
+    /**
+     * 回复 Ark 模板消息。msg_type=3。
+     * ark 为已构造好的 {@code {template_id, kv:[...]}} 节点。
+     * 注意：Ark 需在开放平台为该机器人申请/开通对应模板，否则会报无权限。
+     */
+    public void sendArk(String messagesPath, JsonObject ark, String msgId, int msgSeq) throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("msg_type", 3);
+        body.add("ark", ark);
+        body.addProperty("msg_id", msgId);
+        body.addProperty("msg_seq", msgSeq);
+        post(messagesPath, body);
+    }
+
     /** 回复富媒体消息。msg_type=7。 */
     public void sendMedia(String messagesPath, String fileInfo, String msgId, int msgSeq) throws Exception {
+        sendMedia(messagesPath, fileInfo, null, msgId, msgSeq);
+    }
+
+    /** 回复富媒体消息，可附带 keyboard 按钮（为 null 则不带）。msg_type=7。 */
+    public void sendMedia(String messagesPath, String fileInfo, JsonObject keyboard,
+                          String msgId, int msgSeq) throws Exception {
         JsonObject media = new JsonObject();
         media.addProperty("file_info", fileInfo);
 
@@ -134,6 +175,9 @@ public class QQApi {
         body.addProperty("content", " ");
         body.addProperty("msg_type", 7);
         body.add("media", media);
+        if (keyboard != null) {
+            body.add("keyboard", keyboard);
+        }
         body.addProperty("msg_id", msgId);
         body.addProperty("msg_seq", msgSeq);
         post(messagesPath, body);

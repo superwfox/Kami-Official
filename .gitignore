@@ -1,4 +1,6 @@
 target/
 dependency-reduced-pom.xml
+.i2ence
+reference
+public
 .idea
-.github
