@@ -51,6 +51,27 @@ java -jar target/kami-qqbot.jar /path/to/config.yml
 
 启动后看到 `[WS] READY，鉴权成功，机器人已上线` 即表示连接成功。
 
+## 在 GitHub Actions 上临时运行（测试用）
+
+仓库带了两个工作流：
+
+- `.github/workflows/build.yml`：push / PR 时自动 `mvn package`，并把
+  `kami-qqbot.jar` 作为 artifact 上传，可在对应 run 页面下载。
+- `.github/workflows/run.yml`：**手动触发**，在 Actions runner 上直接把机器人跑起来，方便临时测试。
+
+使用 `run.yml`：
+
+1. 在 仓库 **Settings → Secrets and variables → Actions** 添加：
+   - `QQ_APP_ID`：机器人 AppID
+   - `QQ_CLIENT_SECRET`：机器人 AppSecret
+   - `QQ_LOGO_URL`：（可选）logo 图片直链，不填用默认值
+2. 打开 **Actions → Run Bot → Run workflow**，可填运行时长（分钟，默认 60）。
+3. 运行期间在 run 日志里能看到 `[WS] READY` 与收到的消息，到时自动停止。
+
+> ⚠️ GitHub Actions 不是用来托管常驻服务的：单次任务**最长 6 小时**会被强制结束，
+> 而且不保证稳定在线。它只适合临时拉起来测一测，**正式长期运行请部署到自己的服务器**
+> （`java -jar kami-qqbot.jar`）。Secret 不会写进代码，仅在运行时生成 `config.yml`。
+
 ## 实现要点
 
 - **鉴权**：用 `AppID + AppSecret` 调 `https://bots.qq.com/app/getAppAccessToken` 换取

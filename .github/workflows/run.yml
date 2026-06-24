@@ -1,0 +1,63 @@
+name: Run Bot
+
+# 手动在 Actions 页面触发，用于临时跑起机器人做测试。
+# 注意：GitHub Actions 不是用来托管常驻服务的，单次任务最长 6 小时，
+# 到时会被强制结束；正式长期运行请放到自己的服务器。
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: '运行时长（分钟，最大 350，到时自动停止）'
+        required: false
+        default: '60'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B clean package
+
+      - name: Generate config.yml from secrets
+        env:
+          QQ_APP_ID: ${{ secrets.QQ_APP_ID }}
+          QQ_CLIENT_SECRET: ${{ secrets.QQ_CLIENT_SECRET }}
+          QQ_LOGO_URL: ${{ secrets.QQ_LOGO_URL }}
+        run: |
+          if [ -z "$QQ_APP_ID" ] || [ -z "$QQ_CLIENT_SECRET" ]; then
+            echo "::error::请先在 仓库 Settings -> Secrets and variables -> Actions 配置 QQ_APP_ID 与 QQ_CLIENT_SECRET"
+            exit 1
+          fi
+          cat > config.yml <<EOF
+          appId: "${QQ_APP_ID}"
+          clientSecret: "${QQ_CLIENT_SECRET}"
+          sandbox: false
+          logoUrl: "${QQ_LOGO_URL:-https://github.com/superwfox/minecraft-dev/blob/master/public/silver.png?raw=true}"
+          EOF
+          echo "config.yml 已生成"
+
+      - name: Run bot
+        run: |
+          MINUTES="${{ github.event.inputs.minutes }}"
+          MINUTES="${MINUTES:-60}"
+          echo "机器人将运行 ${MINUTES} 分钟后自动停止"
+          set +e
+          timeout "${MINUTES}m" java -jar target/kami-qqbot.jar
+          code=$?
+          if [ "$code" = "124" ]; then
+            echo "已到设定时长，正常停止"
+            exit 0
+          fi
+          exit $code
