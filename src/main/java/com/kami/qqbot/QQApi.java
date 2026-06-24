@@ -172,7 +172,7 @@ public class QQApi {
         media.addProperty("file_info", fileInfo);
 
         JsonObject body = new JsonObject();
-        body.addProperty("content", " ");
+        body.addProperty("content", ""); // 实验：去掉占位空格，看富媒体图能否不带文字行（若报 40034 再改回 " "）
         body.addProperty("msg_type", 7);
         body.add("media", media);
         if (keyboard != null) {

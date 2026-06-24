@@ -275,9 +275,9 @@ public final class CardRenderer {
         idx.sort((a, b) -> Double.compare(sec[b], sec[a]));
 
         StringBuilder sb = new StringBuilder();
-        sb.append("# ").append(name).append(" · 战绩总览\n\n---\n\n");
+        sb.append("# ").append(" · 战绩总览\n> ## **").append(name.toUpperCase());
 
-        sb.append("**泰坦使用时长**\n");
+        sb.append("**\n\n---\n\n**泰坦使用时长**\n");
         if (idx.isEmpty()) {
             sb.append("- 暂无泰坦时间线\n");
         } else {
@@ -293,13 +293,13 @@ public final class CardRenderer {
         for (JsonElement me : matches) {
             JsonObject m = me.getAsJsonObject();
             String when = beijing(gs(m, "uploaded_at"));
-            sb.append("- ").append(when).append("　");
+            sb.append("- ").append(when).append(" - ");
             if ("att".equals(gs(m, "mode"))) {
-                sb.append("ATT　`").append(rankText(gi(m, "score_rank"))).append("`\n");
+                sb.append("`").append(rankText(gi(m, "score_rank"))).append("`\n");
             } else {
                 int[] ps = playerStat(m, name);
                 int avg = ps != null ? ps[4] : 0;
-                sb.append("命均　`").append(formatStat(avg)).append("`\n");
+                sb.append("`").append(formatStat(avg)).append("`\n");
                 if (ps != null) {
                     sumAvg += avg;
                     cntAvg++;
@@ -909,7 +909,7 @@ public final class CardRenderer {
     }
 
     private static final DateTimeFormatter IN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    private static final DateTimeFormatter OUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final DateTimeFormatter OUT = DateTimeFormatter.ofPattern("MM-dd HH:mm");
 
     private static String beijing(String utc) {
         if (utc == null || utc.isEmpty()) return "";

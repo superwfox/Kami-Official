@@ -99,6 +99,11 @@ public class MessageHandler {
             replyHomepage(messagesPath, msgId);
             return;
         }
+        if (content.equals("命令大全") || content.equals("命令")
+                || content.equals("帮助") || content.equalsIgnoreCase("help")) {
+            replyHelp(messagesPath, msgId);
+            return;
+        }
 
         // 战绩查询（渲染卡片 + @ 发送者）
         String lower = content.toLowerCase();
@@ -208,16 +213,17 @@ public class MessageHandler {
     /** 上传 PNG 取 file_info，再以富媒体消息发送并 @ 发送者。 */
     private void sendImage(String messagesPath, String filesPath, byte[] png, String atOpenid, String msgId)
             throws Exception {
-        // 富媒体消息不渲染 keyboard（仅 Markdown 会），故先发纯图，再单发一条带按钮的 Markdown。
+        // 富媒体消息不渲染 keyboard（仅 Markdown 会），正常会再单发一条带按钮的 Markdown。
         String fileInfo = api.uploadMediaData(filesPath, png, 1);
         api.sendMedia(messagesPath, fileInfo, msgId, seqGen.getAndIncrement());
-        try {
-            JsonObject md = new JsonObject();
-            md.addProperty("content", "📊 完整战绩与榜单 → ttdm.space");
-            api.sendMarkdown(messagesPath, md, ttdmKeyboard(), msgId, seqGen.getAndIncrement());
-        } catch (Exception e) {
-            System.err.println("[MSG] 按钮消息发送失败（不影响图片）: " + e.getMessage());
-        }
+        // 【临时实验】只发纯图，确认富媒体图本身是否还被气泡包裹；验证后恢复下面这条按钮消息。
+        // try {
+        //     JsonObject md = new JsonObject();
+        //     md.addProperty("content", "完整战绩与榜单 → ttdm.space");
+        //     api.sendMarkdown(messagesPath, md, ttdmKeyboard(), msgId, seqGen.getAndIncrement());
+        // } catch (Exception e) {
+        //     System.err.println("[MSG] 按钮消息发送失败（不影响图片）: " + e.getMessage());
+        // }
     }
 
     /** 构造仅含「前往 ttdm.space」一个链接按钮的 keyboard。 */
@@ -301,6 +307,26 @@ public class MessageHandler {
         keyboard.add("content", keyboardContent);
 
         api.sendMarkdown(messagesPath, markdown, keyboard, msgId, seqGen.getAndIncrement());
+    }
+
+    /** “命令大全”：回复 Markdown 功能列表（供群友查看可用指令）。 */
+    private void replyHelp(String messagesPath, String msgId) throws Exception {
+        String content = "# KAMI 功能列表\n\n---\n\n"
+                + "- `查查 玩家名` — 战绩总览\n"
+                + "- `ttdm 玩家名` — 最近一局 TDM 对局\n"
+                + "- `att 玩家名` — 最近一局 ATT 对局\n"
+                + "- `官网` — 常用站点导航\n"
+                + "- `泰坦排行榜` — 该泰坦命均 & 时长榜（「泰坦」替换为下列之一）：\n"
+                + "  - 军团\n"
+                + "  - 浪人\n"
+                + "  - 北极星\n"
+                + "  - 烈焰\n"
+                + "  - 强力\n"
+                + "  - 帝王\n"
+                + "  - 离子\n";
+        JsonObject markdown = new JsonObject();
+        markdown.addProperty("content", content);
+        api.sendMarkdown(messagesPath, markdown, ttdmKeyboard(), msgId, seqGen.getAndIncrement());
     }
 
     /** 构造仅含一个链接按钮的按钮行。 */
