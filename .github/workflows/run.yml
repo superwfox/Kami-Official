@@ -1,16 +1,30 @@
 name: Run Bot
 
-# 手动在 Actions 页面触发，用于临时跑起机器人做测试。
-# 注意：GitHub Actions 不是用来托管常驻服务的，单次任务最长 6 小时，
-# 到时会被强制结束；正式长期运行请放到自己的服务器。
+# 手动触发后会「自我续期」：每轮快结束时再触发下一轮，从而让机器人持续在线。
+# 停止条件（满足任一即不再续期）：
+#   1) 你在 Actions 页面手动取消（Cancel）当前运行；
+#   2) master 上有了新提交（视为「重新编译」，旧链停止，按新代码重新手动启动）；
+#   3) 本轮启动后很快就退出（疑似配置错误），为避免空转刷分而停。
+#
+# ⚠️ 续期依赖一个有 workflow 权限的 PAT（保存为 secret WORKFLOW_PAT）：
+#    GitHub 默认的 GITHUB_TOKEN 触发的事件不会再拉起新的 workflow，必须用 PAT。
+#    未配置 WORKFLOW_PAT 时本工作流仍可单轮运行，只是不会自动续期。
+#
+# 注意：GitHub Actions 并非用于托管常驻服务，长期占用可能违反使用条款；
+#      正式长期运行请部署到自己的服务器。
 
 on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: '运行时长（分钟，最大 350，到时自动停止）'
+        description: '单轮运行时长（分钟，最大 350，到时自动续期）'
         required: false
-        default: '60'
+        default: '300'
+
+# 同一时间只允许一个机器人实例：新的运行会取消正在进行的旧运行，避免重复回复。
+concurrency:
+  group: run-bot
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -53,10 +67,12 @@ jobs:
           echo "config.yml 已生成"
 
       - name: Run bot
+        id: run
         run: |
           MINUTES="${{ github.event.inputs.minutes }}"
-          MINUTES="${MINUTES:-60}"
-          echo "机器人将运行 ${MINUTES} 分钟后自动停止"
+          MINUTES="${MINUTES:-300}"
+          echo "start_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "机器人将运行 ${MINUTES} 分钟后自动停止并续期"
           set +e
           timeout "${MINUTES}m" java -jar target/kami-qqbot.jar
           code=$?
@@ -65,3 +81,33 @@ jobs:
             exit 0
           fi
           exit $code
+
+      # 续期：只要不是被手动取消，就尝试拉起下一轮（满足停止条件则不续）。
+      - name: Keep alive (re-arm next run)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::未配置 WORKFLOW_PAT，无法自动续期，本轮结束后机器人会停止。"
+            exit 0
+          fi
+
+          # 启动后很快退出，多半是配置/编译问题，停止续期以免空转消耗额度
+          elapsed=$(( $(date +%s) - ${{ steps.run.outputs.start_epoch }} ))
+          if [ "$elapsed" -lt 300 ]; then
+            echo "::warning::本轮仅运行 ${elapsed}s（疑似启动即退出），停止续期。请检查 secrets / 构建。"
+            exit 0
+          fi
+
+          # master 有新提交 = 视为「重新编译」，旧链停止
+          latest=$(gh api "repos/${{ github.repository }}/commits/${{ github.ref_name }}" --jq .sha)
+          if [ "$latest" != "${{ github.sha }}" ]; then
+            echo "检测到新提交（${latest:0:7} ≠ ${GITHUB_SHA:0:7}），代码已更新，停止续期。"
+            echo "如需继续运行新代码，请到 Actions 重新手动触发 Run Bot。"
+            exit 0
+          fi
+
+          echo "续期：触发下一轮 Run Bot ..."
+          gh workflow run run.yml --ref "${{ github.ref_name }}" \
+            -f minutes="${{ github.event.inputs.minutes || '300' }}"
