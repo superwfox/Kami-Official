@@ -1,6 +1,7 @@
 package com.kami.qqbot;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -190,7 +191,7 @@ public class QQApi {
 
     /**
      * 统一的 HTTP 请求：body 为 null 时发 GET，否则发 POST；按需带 Authorization。
-     * 返回解析后的 JSON 响应，并打印状态码与响应体便于排查。
+     * 返回原始 JSON 响应；日志中的敏感字段脱敏，令牌接口不记录响应体。
      */
     private JsonObject request(String url, boolean auth, JsonObject body) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
@@ -208,14 +209,47 @@ public class QQApi {
         }
 
         HttpResponse<String> resp = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        System.out.println("[QQApi] " + method + " " + url + " -> " + resp.statusCode() + " " + resp.body());
-        return JsonParser.parseString(resp.body()).getAsJsonObject();
+        System.out.println("[QQApi] " + method + " " + url + " -> " + resp.statusCode());
+        JsonObject json = JsonParser.parseString(resp.body()).getAsJsonObject();
+        if (!TOKEN_URL.equals(url)) {
+            System.out.println("[QQApi] response: " + safeResponse(json));
+        }
+        return json;
     }
 
-    /** 取出必需的字符串字段，缺失或为 null 时带响应体抛错。 */
+    /** 在副本中脱敏，避免影响调用方使用原始令牌或接口字段。 */
+    private static String safeResponse(JsonObject json) {
+        JsonObject safe = json.deepCopy();
+        redactSensitiveFields(safe);
+        return safe.toString();
+    }
+
+    private static void redactSensitiveFields(JsonElement element) {
+        if (element.isJsonObject()) {
+            JsonObject object = element.getAsJsonObject();
+            for (String key : object.keySet()) {
+                String normalized = key.replace("_", "");
+                if ("accessToken".equalsIgnoreCase(normalized)
+                        || "refreshToken".equalsIgnoreCase(normalized)
+                        || "clientSecret".equalsIgnoreCase(normalized)
+                        || "appSecret".equalsIgnoreCase(normalized)
+                        || "authorization".equalsIgnoreCase(normalized)) {
+                    object.addProperty(key, "[REDACTED]");
+                } else {
+                    redactSensitiveFields(object.get(key));
+                }
+            }
+        } else if (element.isJsonArray()) {
+            for (JsonElement item : element.getAsJsonArray()) {
+                redactSensitiveFields(item);
+            }
+        }
+    }
+
+    /** 取出必需的字符串字段，缺失或为 null 时带脱敏响应体抛错。 */
     private static String require(JsonObject json, String key, String errPrefix) {
         if (!json.has(key) || json.get(key).isJsonNull()) {
-            throw new RuntimeException(errPrefix + ": " + json);
+            throw new RuntimeException(errPrefix + ": " + safeResponse(json));
         }
         return json.get(key).getAsString();
     }
