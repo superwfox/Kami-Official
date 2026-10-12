@@ -3,7 +3,12 @@ package com.kami.qqbot;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.kami.qqbot.BilibiliRelated.BilibiliApi;
+import com.kami.qqbot.BilibiliRelated.BilibiliMessageFormatter;
+import com.kami.qqbot.BilibiliRelated.BilibiliProfile;
+import com.kami.qqbot.BilibiliRelated.BilibiliVideo;
 
+import java.io.IOException;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -18,6 +23,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   ttdm &lt;玩家名&gt;   -> 最近一局 TDM 对局卡
  *   att &lt;玩家名&gt;    -> 最近一局 ATT 对局卡
  *   &lt;泰坦中文&gt;排行榜 -> 该泰坦命均/时长榜
+ *   含 https://b23.tv/ -> B 站视频封面、标题、UP 和统计
+ *   含 https://space.bilibili.com/ -> 头像、昵称、粉丝、投稿视频数和最新动态链接
  * 群消息会 @ 发送者（单聊不 @）。
  */
 public class MessageHandler {
@@ -27,6 +34,7 @@ public class MessageHandler {
     private final QQApi api;
     private final Config config;
     private final TTDMApi ttdm;
+    private final BilibiliApi bilibili = new BilibiliApi();
     /** msg_seq 在同一 msg_id 下需唯一，这里用全局自增保证唯一。 */
     private final AtomicInteger seqGen = new AtomicInteger(1);
 
@@ -86,6 +94,15 @@ public class MessageHandler {
         String msgId = d.get("id").getAsString();
         System.out.println("[MSG] " + source + " content=[" + content + "]");
 
+        if (content.contains("https://b23.tv/")) {
+            replyBilibili(messagesPath, atOpenid, msgId, content);
+            return;
+        }
+        if (content.contains("https://space.bilibili.com/")) {
+            replyBilibiliProfile(messagesPath, atOpenid, msgId, content);
+            return;
+        }
+
         // 原有静态指令
         if (content.equals("报时")) {
             replyTime(messagesPath, msgId);
@@ -130,6 +147,52 @@ public class MessageHandler {
             return;
         }
         // 其它内容忽略
+    }
+
+    /** 群聊和私聊共用 B 站短链解析，回复一条包含封面和统计的 Markdown。 */
+    private void replyBilibili(String messagesPath, String atOpenid, String msgId, String content) {
+        BilibiliVideo video;
+        try {
+            video = bilibili.parse(content);
+        } catch (IOException e) {
+            System.err.println("[Bilibili] 解析失败: " + e.getMessage());
+            trySendError(messagesPath, atOpenid, msgId, e.getMessage());
+            return;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("[Bilibili] 视频解析已中断");
+            return;
+        }
+        try {
+            JsonObject markdown = new JsonObject();
+            markdown.addProperty("content", BilibiliMessageFormatter.markdown(video));
+            api.sendMarkdown(messagesPath, markdown, null, msgId, seqGen.getAndIncrement());
+        } catch (Exception e) {
+            fail(messagesPath, atOpenid, msgId, "视频解析消息发送失败", e);
+        }
+    }
+
+    /** B 站主页链接与视频短链独立解析，复用群聊和单聊回复接口。 */
+    private void replyBilibiliProfile(String messagesPath, String atOpenid, String msgId, String content) {
+        BilibiliProfile profile;
+        try {
+            profile = bilibili.parseProfile(content);
+        } catch (IOException e) {
+            System.err.println("[Bilibili] 主页解析失败: " + e.getMessage());
+            trySendError(messagesPath, atOpenid, msgId, e.getMessage());
+            return;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("[Bilibili] 主页解析已中断");
+            return;
+        }
+        try {
+            JsonObject markdown = new JsonObject();
+            markdown.addProperty("content", BilibiliMessageFormatter.profileMarkdown(profile));
+            api.sendMarkdown(messagesPath, markdown, null, msgId, seqGen.getAndIncrement());
+        } catch (Exception e) {
+            fail(messagesPath, atOpenid, msgId, "主页解析消息发送失败", e);
+        }
     }
 
     // ── 战绩查询指令 ───────────────────────────────────────────────
@@ -316,6 +379,8 @@ public class MessageHandler {
                 + "- `ttdm 玩家名` — 最近一局 TDM 对局\n"
                 + "- `att 玩家名` — 最近一局 ATT 对局\n"
                 + "- `官网` — 常用站点导航\n"
+                + "- 分享 B 站视频短链接（`https://b23.tv/`）— 封面、标题、UP 与统计\n"
+                + "- 分享 B 站主页链接（`https://space.bilibili.com/UID`）— 头像、粉丝、上传视频与最新动态\n"
                 + "- `泰坦排行榜` — 该泰坦命均 & 时长榜（「泰坦」替换为下列之一）：\n"
                 + "  - 军团\n"
                 + "  - 浪人\n"

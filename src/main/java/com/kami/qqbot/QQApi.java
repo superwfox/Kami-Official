@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -213,6 +214,12 @@ public class QQApi {
         JsonObject json = JsonParser.parseString(resp.body()).getAsJsonObject();
         if (!TOKEN_URL.equals(url)) {
             System.out.println("[QQApi] response: " + safeResponse(json));
+        }
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new IOException("QQ 接口请求失败，HTTP " + resp.statusCode());
+        }
+        if (json.has("code") && !json.get("code").isJsonNull() && json.get("code").getAsInt() != 0) {
+            throw new IOException("QQ 接口返回错误，code=" + json.get("code").getAsInt());
         }
         return json;
     }
