@@ -12,6 +12,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -46,7 +47,8 @@ public final class BilibiliApi {
     public BilibiliVideo parse(String content) throws IOException, InterruptedException {
         Matcher link = SHORT_LINK.matcher(content);
         if (!link.find()) throw new IOException("未找到有效的 B 站视频短链接");
-        String videoId = resolveVideoId(URI.create("https://b23.tv/" + link.group(1)));
+        ResolvedVideo target = resolveVideo(URI.create("https://b23.tv/" + link.group(1)));
+        String videoId = target.id;
         String parameter = videoId.startsWith("BV") ? "bvid=" + videoId : "aid=" + videoId.substring(2);
         JsonObject data = getData(API_BASE + parameter, "视频");
 
@@ -69,9 +71,11 @@ public final class BilibiliApi {
         }
 
         int[] size = coverSize(cover);
+        String playerUrl = "https://player.bilibili.com/player.html?" + parameter + "&autoplay=1"
+                + (target.page > 1 ? "&p=" + target.page : "");
         return new BilibiliVideo(title, cover.toASCIIString(), size[0], size[1], uploaderName, uploaderId,
                 count(statistics, "like"), count(statistics, "reply"),
-                count(statistics, "favorite"), count(statistics, "share"));
+                count(statistics, "favorite"), count(statistics, "share"), playerUrl);
     }
 
     /** 主页数值读取 card 接口；archive_count 是投稿视频数，不使用专栏数 article_count。 */
@@ -171,13 +175,13 @@ public final class BilibiliApi {
     }
 
     /** 手动跟随短链跳转，只允许 B 站域名；一旦取得视频编号就停止请求网页。 */
-    private String resolveVideoId(URI uri) throws IOException, InterruptedException {
+    private ResolvedVideo resolveVideo(URI uri) throws IOException, InterruptedException {
         for (int hop = 0; hop <= 3; hop++) {
             if (!trustedVideoUri(uri)) throw new IOException("该短链接没有指向可解析的 B 站视频");
             String host = uri.getHost().toLowerCase(java.util.Locale.ROOT);
             if (VIDEO_HOSTS.contains(host)) {
                 Matcher video = VIDEO_PATH.matcher(uri.getPath());
-                if (video.find()) return video.group(1);
+                if (video.find()) return new ResolvedVideo(video.group(1), pageNumber(uri));
                 throw new IOException("该 B 站链接不是视频，暂不支持解析");
             }
             if (hop == 3) break;
@@ -197,6 +201,31 @@ public final class BilibiliApi {
             }
         }
         throw new IOException("B 站短链接跳转次数过多，暂时无法解析");
+    }
+
+    private static int pageNumber(URI uri) throws IOException {
+        if (uri.getRawQuery() == null) return 1;
+        for (String parameter : uri.getRawQuery().split("&")) {
+            if (!parameter.startsWith("p=")) continue;
+            try {
+                int page = Integer.parseInt(URLDecoder.decode(parameter.substring(2), StandardCharsets.UTF_8));
+                if (page > 0) return page;
+            } catch (IllegalArgumentException e) {
+                throw new IOException("视频分 P 编号无效", e);
+            }
+            throw new IOException("视频分 P 编号无效");
+        }
+        return 1;
+    }
+
+    private static final class ResolvedVideo {
+        private final String id;
+        private final int page;
+
+        private ResolvedVideo(String id, int page) {
+            this.id = id;
+            this.page = page;
+        }
     }
 
     private static boolean trustedVideoUri(URI uri) {

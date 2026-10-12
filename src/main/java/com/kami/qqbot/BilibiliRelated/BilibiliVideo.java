@@ -1,6 +1,6 @@
 package com.kami.qqbot.BilibiliRelated;
 
-/** 发送解析消息所需的视频信息，不包含播放地址或短链中的分享参数。 */
+/** 视频资料与官方独立播放器入口，不保存分享追踪参数。 */
 public final class BilibiliVideo {
     private final String title;
     private final String coverUrl;
@@ -12,10 +12,11 @@ public final class BilibiliVideo {
     private final long comments;
     private final long favorites;
     private final long shares;
+    private final String playerUrl;
 
     public BilibiliVideo(String title, String coverUrl, int coverWidth, int coverHeight,
                          String uploaderName, long uploaderId, long likes, long comments,
-                         long favorites, long shares) {
+                         long favorites, long shares, String playerUrl) {
         this.title = title;
         this.coverUrl = coverUrl;
         this.coverWidth = coverWidth;
@@ -26,6 +27,7 @@ public final class BilibiliVideo {
         this.comments = comments;
         this.favorites = favorites;
         this.shares = shares;
+        this.playerUrl = playerUrl;
     }
 
     public String title() { return title; }
@@ -38,4 +40,5 @@ public final class BilibiliVideo {
     public long comments() { return comments; }
     public long favorites() { return favorites; }
     public long shares() { return shares; }
+    public String playerUrl() { return playerUrl; }
 }

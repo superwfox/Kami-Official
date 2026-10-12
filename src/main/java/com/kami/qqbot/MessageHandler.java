@@ -149,7 +149,7 @@ public class MessageHandler {
         // 其它内容忽略
     }
 
-    /** 群聊和私聊共用 B 站短链解析，回复一条包含封面和统计的 Markdown。 */
+    /** 群聊和私聊共用 B 站短链解析，回复封面、统计及“直接观看”按钮。 */
     private void replyBilibili(String messagesPath, String atOpenid, String msgId, String content) {
         BilibiliVideo video;
         try {
@@ -166,10 +166,21 @@ public class MessageHandler {
         try {
             JsonObject markdown = new JsonObject();
             markdown.addProperty("content", BilibiliMessageFormatter.markdown(video));
-            api.sendMarkdown(messagesPath, markdown, null, msgId, seqGen.getAndIncrement());
+            api.sendMarkdown(messagesPath, markdown, bilibiliKeyboard(video.playerUrl()), msgId, seqGen.getAndIncrement());
         } catch (Exception e) {
             fail(messagesPath, atOpenid, msgId, "视频解析消息发送失败", e);
         }
+    }
+
+    /** QQ 原生链接按钮，所有查看消息的用户都可打开 B 站独立播放器。 */
+    private JsonObject bilibiliKeyboard(String playerUrl) {
+        JsonArray rows = new JsonArray();
+        rows.add(buttonRow("0", " 直接观看 ", playerUrl));
+        JsonObject content = new JsonObject();
+        content.add("rows", rows);
+        JsonObject keyboard = new JsonObject();
+        keyboard.add("content", content);
+        return keyboard;
     }
 
     /** B 站主页链接与视频短链独立解析，复用群聊和单聊回复接口。 */
