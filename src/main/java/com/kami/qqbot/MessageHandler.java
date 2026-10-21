@@ -94,7 +94,8 @@ public class MessageHandler {
     /** 群与单聊共用的指令处理；差异仅在消息/文件接口路径与 @ 目标。 */
     private void handleCommand(JsonObject d, String source, String messagesPath, String filesPath,
                                String atOpenid) throws Exception {
-        String content = d.has("content") ? d.get("content").getAsString().trim() : "";
+        String content = d.has("content") && !d.get("content").isJsonNull()
+                ? d.get("content").getAsString().trim() : "";
         String msgId = d.get("id").getAsString();
         System.out.println("[MSG] " + source + " content=[" + content + "]");
 
