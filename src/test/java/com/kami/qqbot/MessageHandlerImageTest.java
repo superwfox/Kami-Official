@@ -28,12 +28,13 @@ class MessageHandlerImageTest {
             return true;
         })) {
             JsonObject data = json("{\"id\":\"image-msg\",\"group_openid\":\"test-group\","
+                    + "\"message_scene\":{\"ext\":[\"ref_msg_idx=REFIDX_old\",\"msg_idx=REFIDX_current\"]},"
                     + "\"author\":{\"member_openid\":\"test-user\"},\"content\":null,"
                     + "\"attachments\":[{\"content_type\":\"image\",\"url\":\"https://gchat.qpic.cn/original\"}]}");
             handler.onEvent(event, data);
             assertTrue(replied.await(3, TimeUnit.SECONDS));
             assertEquals(List.of("https://gchat.qpic.cn/original"), urls);
-            assertEquals(List.of("/v2/groups/test-group/messages|image-msg|图片由OpenAI生成，请注意识别⚠️"), replies);
+            assertEquals(List.of("/v2/groups/test-group/messages|image-msg|REFIDX_current|图片由AI生成，请注意识别⚠️"), replies);
         }
     }
 
@@ -52,8 +53,20 @@ class MessageHandlerImageTest {
                     + "\"attachments\":{\"content_type\":\"file\",\"url\":\"https://multimedia.nt.qq.com.cn/download\"}}"));
             assertTrue(replied.await(3, TimeUnit.SECONDS));
             assertEquals(List.of("https://multimedia.nt.qq.com.cn/download"), urls);
-            assertEquals(List.of("/v2/users/test-user/messages|private-msg|图片由OpenAI生成，请注意识别⚠️"), replies);
+            assertEquals(List.of("/v2/users/test-user/messages|private-msg|private-msg|图片由AI生成，请注意识别⚠️"), replies);
         }
+    }
+
+    @Test
+    void quoteReferenceNeverUsesTheMessageThatUserQuoted() {
+        assertEquals("REFIDX_current", ImageProvenanceHandler.referenceId(json(
+                "{\"id\":\"current\",\"message_scene\":{\"ext\":[null,42,\"msgIdx:REFIDX_current\",\"ref_msg_idx=old\"]}}")));
+        assertEquals("current", ImageProvenanceHandler.referenceId(json(
+                "{\"id\":\"current\",\"message_scene\":{\"ext\":[\"ref_msg_idx=old\",\"msg_idx= \"]}}")));
+        assertEquals("current", ImageProvenanceHandler.referenceId(json(
+                "{\"id\":\"current\",\"message_scene\":null}")));
+        assertThrows(IllegalArgumentException.class,
+                () -> QQApi.quotedTextBody(ImageProvenanceHandler.WARNING, "current", "", 1));
     }
 
     private static Config config() {
@@ -65,8 +78,11 @@ class MessageHandlerImageTest {
     private static QQApi capturingApi(Config config, List<String> replies, CountDownLatch replied) {
         return new QQApi(config) {
             @Override
-            public void sendText(String path, String text, String id, int sequence) {
-                replies.add(path + "|" + id + "|" + text);
+            public void sendQuotedText(String path, String text, String id, String referenceId, int sequence) {
+                JsonObject body = QQApi.quotedTextBody(text, id, referenceId, sequence);
+                assertEquals(0, body.get("msg_type").getAsInt());
+                assertEquals(id, body.get("msg_id").getAsString());
+                replies.add(path + "|" + id + "|" + body.getAsJsonObject("message_reference").get("message_id").getAsString() + "|" + text);
                 replied.countDown();
             }
         };

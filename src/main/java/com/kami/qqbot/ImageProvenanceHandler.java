@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 
 /** 收到图片后后台检查；仅确认来源时被动回复，同一条消息只提示一次。 */
 final class ImageProvenanceHandler implements AutoCloseable {
-    static final String WARNING = "图片由OpenAI生成，请注意识别⚠️";
+    static final String WARNING = "图片由AI生成，请注意识别⚠️";
     private static final long MAX_AGE_MS = Duration.ofMinutes(3).toMillis();
     private final Detector detector;
     private final WarningSender sender;
@@ -30,7 +30,7 @@ final class ImageProvenanceHandler implements AutoCloseable {
     }
 
     interface WarningSender {
-        void send(String messagesPath, String msgId, String text) throws Exception;
+        void send(String messagesPath, String msgId, String referenceId, String text) throws Exception;
     }
 
     static ImageProvenanceHandler create(Config config, WarningSender sender) {
@@ -83,14 +83,15 @@ final class ImageProvenanceHandler implements AutoCloseable {
             seen.put(key, receivedAt);
         }
         try {
-            workers.execute(() -> check(images, messagesPath, msgId, receivedAt));
+            String referenceId = referenceId(message);
+            workers.execute(() -> check(images, messagesPath, msgId, referenceId, receivedAt));
             System.out.println("[AI Image] 已提交后台检测，images=" + images.size());
         } catch (RejectedExecutionException e) {
             System.err.println("[AI Image] 检测队列已满，跳过本条图片消息");
         }
     }
 
-    void check(List<String> images, String messagesPath, String msgId, long receivedAt) {
+    void check(List<String> images, String messagesPath, String msgId, String referenceId, long receivedAt) {
         for (String url : images) {
             if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() - receivedAt > MAX_AGE_MS) {
                 System.out.println("[AI Image] 跳过过期或已中断的图片任务");
@@ -108,7 +109,7 @@ final class ImageProvenanceHandler implements AutoCloseable {
             }
             if (detected) {
                 try {
-                    sender.send(messagesPath, msgId, WARNING);
+                    sender.send(messagesPath, msgId, referenceId, WARNING);
                     System.out.println("[AI Image] 检测到 OpenAI 来源，已回复原消息");
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -119,6 +120,25 @@ final class ImageProvenanceHandler implements AutoCloseable {
             }
             System.out.println("[AI Image] 本图未检出受支持的 OpenAI 来源信号，不发送提醒");
         }
+    }
+
+    /** 引用当前消息自身的索引，不能使用 ref_msg_idx（它指向用户引用的旧消息）。 */
+    static String referenceId(JsonObject message) {
+        JsonElement scene = message.get("message_scene");
+        if (scene != null && scene.isJsonObject()) {
+            JsonElement ext = scene.getAsJsonObject().get("ext");
+            if (ext != null && ext.isJsonArray()) {
+                for (JsonElement item : ext.getAsJsonArray()) {
+                    if (!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isString()) continue;
+                    String value = item.getAsString();
+                    String index = value.startsWith("msg_idx=") ? value.substring(8).trim()
+                            : value.startsWith("msgIdx:") ? value.substring(7).trim() : "";
+                    if (!index.isEmpty()) return index;
+                }
+            }
+        }
+        // 官方 Python SDK 的 reply_to 使用原消息 ID；没有索引时仍显式携带引用字段。
+        return string(message, "id");
     }
 
     static List<String> imageUrls(JsonObject message) {
