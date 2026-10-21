@@ -27,6 +27,9 @@ public class Config {
     /** 收到图片附件时自动验证 OpenAI 来源；没有 API Key 时不启用。 */
     public boolean aiImageCheckEnabled = true;
     public String openaiApiKey;
+    /** 公开 GitHub 仓库链接自动转图片卡片；Token 仅从环境读取。 */
+    public boolean githubCardEnabled = true;
+    public String githubToken;
 
     public static Config load(String path) throws Exception {
         Yaml yaml = new Yaml();
@@ -46,6 +49,8 @@ public class Config {
             c.renderScale = Integer.parseInt(str(data.getOrDefault("renderScale", "2")));
             c.aiImageCheckEnabled = Boolean.parseBoolean(str(data.getOrDefault("aiImageCheckEnabled", "true")));
             c.openaiApiKey = System.getenv("OPENAI_API_KEY");
+            c.githubCardEnabled = Boolean.parseBoolean(str(data.getOrDefault("githubCardEnabled", "true")));
+            c.githubToken = System.getenv("GITHUB_TOKEN");
             return c;
 
         }

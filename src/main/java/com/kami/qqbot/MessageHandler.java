@@ -38,6 +38,7 @@ public class MessageHandler implements AutoCloseable {
     /** msg_seq 在同一 msg_id 下需唯一，这里用全局自增保证唯一。 */
     private final AtomicInteger seqGen = new AtomicInteger(1);
     private final ImageProvenanceHandler imageProvenance;
+    private final GitHubCardHandler githubCards;
 
     public MessageHandler(QQApi api, Config config) {
         this(api, config, null);
@@ -45,6 +46,11 @@ public class MessageHandler implements AutoCloseable {
 
     /** 测试注入来源检测器，验证真实消息分发路径而不调用外部服务。 */
     MessageHandler(QQApi api, Config config, ImageProvenanceHandler.Detector detector) {
+        this(api, config, detector, null);
+    }
+
+    MessageHandler(QQApi api, Config config, ImageProvenanceHandler.Detector detector,
+                   GitHubCardHandler.Preview githubPreview) {
         this.api = api;
         this.config = config;
         this.ttdm = new TTDMApi(config);
@@ -52,6 +58,14 @@ public class MessageHandler implements AutoCloseable {
                 api.sendQuotedText(messagesPath, text, msgId, referenceId, seqGen.getAndIncrement());
         this.imageProvenance = detector == null ? ImageProvenanceHandler.create(config, sender)
                 : new ImageProvenanceHandler(detector, sender);
+        GitHubCardHandler.Sender cardSender = (messagesPath, filesPath, msgId, png) -> {
+            String fileInfo = api.uploadMediaData(filesPath, png, 1);
+            api.sendMedia(messagesPath, fileInfo, msgId, seqGen.getAndIncrement());
+        };
+        GitHubCardHandler.ErrorSender cardError = (path, msgId, text) ->
+                api.sendText(path, text, msgId, seqGen.getAndIncrement());
+        this.githubCards = githubPreview == null ? GitHubCardHandler.create(config, cardSender, cardError)
+                : new GitHubCardHandler(githubPreview, cardSender, cardError);
         CardRenderer.loadFont(config.assetDir);
     }
 
@@ -91,6 +105,7 @@ public class MessageHandler implements AutoCloseable {
 
     public void close() {
         imageProvenance.close();
+        githubCards.close();
     }
 
     /** 群事件里取发送者 member_openid（用于 @）；缺失返回 null。 */
@@ -114,6 +129,8 @@ public class MessageHandler implements AutoCloseable {
 
         // 图片异步验证与原有文字指令独立，避免网络请求阻塞 WebSocket 收消息。
         imageProvenance.onMessage(d, messagesPath);
+
+        if (githubCards.onMessage(d, messagesPath, filesPath, content)) return;
 
         if (content.contains("https://b23.tv/")) {
             replyBilibili(messagesPath, atOpenid, msgId, content);
@@ -413,6 +430,7 @@ public class MessageHandler implements AutoCloseable {
                 + "- `官网` — 常用站点导航\n"
                 + "- 分享 B 站视频短链接（`https://b23.tv/`）— 封面、标题、UP 与统计\n"
                 + "- 分享 B 站主页链接（`https://space.bilibili.com/UID`）— 头像、粉丝、上传视频与最新动态\n"
+                + "- 分享 GitHub 仓库链接 — 所有者、贡献者、构建结果与完整 README 图片卡片\n"
                 + "- `泰坦排行榜` — 该泰坦命均 & 时长榜（「泰坦」替换为下列之一）：\n"
                 + "  - 军团\n"
                 + "  - 浪人\n"
