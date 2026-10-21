@@ -37,11 +37,15 @@ public class MessageHandler {
     private final BilibiliApi bilibili = new BilibiliApi();
     /** msg_seq 在同一 msg_id 下需唯一，这里用全局自增保证唯一。 */
     private final AtomicInteger seqGen = new AtomicInteger(1);
+    private final ImageProvenanceHandler imageProvenance;
 
     public MessageHandler(QQApi api, Config config) {
         this.api = api;
         this.config = config;
         this.ttdm = new TTDMApi(config);
+        this.imageProvenance = ImageProvenanceHandler.create(config,
+                (messagesPath, msgId, text) ->
+                        api.sendText(messagesPath, text, msgId, seqGen.getAndIncrement()));
         CardRenderer.loadFont(config.assetDir);
     }
 
@@ -90,9 +94,13 @@ public class MessageHandler {
     /** 群与单聊共用的指令处理；差异仅在消息/文件接口路径与 @ 目标。 */
     private void handleCommand(JsonObject d, String source, String messagesPath, String filesPath,
                                String atOpenid) throws Exception {
-        String content = d.has("content") ? d.get("content").getAsString().trim() : "";
+        String content = d.has("content") && !d.get("content").isJsonNull()
+                ? d.get("content").getAsString().trim() : "";
         String msgId = d.get("id").getAsString();
         System.out.println("[MSG] " + source + " content=[" + content + "]");
+
+        // 图片异步验证与原有文字指令独立，避免网络请求阻塞 WebSocket 收消息。
+        imageProvenance.onMessage(d, messagesPath);
 
         if (content.contains("https://b23.tv/")) {
             replyBilibili(messagesPath, atOpenid, msgId, content);
