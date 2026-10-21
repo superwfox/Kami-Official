@@ -19,6 +19,6 @@ logoUrl: "https://github.com/superwfox/minecraft-dev/blob/master/public/silver.p
 # 启用前在运行环境设置 OPENAI_API_KEY；未配置 Key 时自动跳过，不影响其它功能。
 aiImageCheckEnabled: true
 
-# 分享公开 GitHub 仓库链接时生成暗色卡片，完整呈现 README，超长内容连续分页发送。
+# 分享公开 GitHub 仓库链接时生成暗色卡片，完整呈现 README，超长内容也合并为一张长图发送。
 # 可选环境变量 GITHUB_TOKEN 可提升 GitHub API 额度，不要将 Token 写进本文件。
 githubCardEnabled: true

@@ -52,7 +52,7 @@ Key 不写入仓库或日志。没有 Key 时只禁用这项检测，其它指�
 
 commit hash 后的绿色长尾勾表示该提交的构建成功，红叉表示失败。优先读取名称含 Build / CI / Test / Verify / Check / Lint 或“构建 / 测试 / 检查”的工作流，并按工作流选择最新运行及重试；这使本仓库的 `Build` 与常驻的 `Run Bot` 分开判断。没有匹配的构建工作流时合并 Check Runs 和传统 Commit Status。没有结果、权限不足、仍在运行、取消或全部跳过时不显示成功标记。README 和构建结果都固定到所显示的同一个 commit。
 
-**README 不做字符数、段落数或页数截断。** Markdown 标题、段落、列表、引用、代码块和表格转换为图片；长代码自动折行，超长正文连续分页发送全部图片。分页尽量避开文字行，不用省略号或“摘选”代替正文。README 图片只从 GitHub 图片域名和 shields.io 获取；无法读取的图片显示替代文字和原地址，HTML 脚本、嵌入和本地文件不执行、不读取。
+**README 不做字符数、段落数或高度截断，也不拆成多张图。** Markdown 标题、段落、列表、引用、代码块和表格转换为图片；长代码自动折行，超长正文在同一张长图内完整呈现。图片高度由完整正文计算，一条消息只上传并发送一张 PNG，不用省略号或“摘选”代替正文。并列表格图片按各自单元格宽度等比缩放，保留全部列，避免撑宽表格后裁掉右侧图片与正文。README 图片只从 GitHub 图片域名和 shields.io 获取；无法读取的图片显示替代文字和原地址，HTML 脚本、嵌入和本地文件不执行、不读取。
 
 默认配置：
 
@@ -70,4 +70,4 @@ java -Djava.awt.headless=true -cp target/kami-qqbot.jar \
   com.kami.qqbot.GitHubCardPreview superwfox/Kami-Official target/github-preview
 ```
 
-输出目录含按顺序编号的全部 PNG 及未经截断的 `README-source.md`。Linux 无图形界面同样可用，字体随 JAR 打包，不依赖 Chromium 或宿主机预装字体。群聊和私聊分发、完整 README、贡献者分页、CI 状态与超长渲染在本地模拟 HTTP / QQ 接口中测试，QQ 客户端的最终富媒体显示仍需在测试群验证。
+输出目录含一张完整的 `card.png` 及未经截断的 `README-source.md`。Linux 无图形界面同样可用，字体随 JAR 打包，不依赖 Chromium 或宿主机预装字体。群聊和私聊分发、完整 README、贡献者分页、CI 状态与超长单图渲染和三列并排图片在本地模拟 HTTP / QQ 接口中测试，QQ 客户端的最终富媒体显示仍需在测试群验证。

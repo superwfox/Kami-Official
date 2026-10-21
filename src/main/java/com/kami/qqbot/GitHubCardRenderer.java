@@ -24,15 +24,17 @@ import java.util.List;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Claude-like dark cards, with the complete Markdown document laid out before pagination. */
+/** Claude-like dark cards: one dynamically sized PNG containing the complete README. */
 public final class GitHubCardRenderer {
-    private static final int WIDTH = 720, PAGE_HEIGHT = 2000, BODY_X = 48, BODY_WIDTH = WIDTH - 96;
+    private static final int WIDTH = 720, BODY_X = 48, BODY_WIDTH = WIDTH - 96;
     private static final Color BG = new Color(0x262624), PANEL = new Color(0x30302c), BORDER = new Color(0x45443f);
     private static final Color FG = new Color(0xe9e5dc), MUTED = new Color(0xaaa79e), GREEN = new Color(0xb6ceb8), RED = new Color(0xe3a199);
     private static final Font FONT = loadFont();
-    private final GitHubApi api;
+    interface ImageLoader { BufferedImage load(String url) throws InterruptedException; }
+    private final ImageLoader imageLoader;
 
-    public GitHubCardRenderer(GitHubApi api) { this.api = api; }
+    public GitHubCardRenderer(GitHubApi api) { this(api, api == null ? url -> null : api::asset); }
+    GitHubCardRenderer(GitHubApi api, ImageLoader imageLoader) { this.imageLoader = imageLoader; }
 
     private static Font loadFont() {
         try (InputStream input = GitHubCardRenderer.class.getResourceAsStream("/github-card/DingTalk-JinBuTi.ttf")) {
@@ -44,13 +46,13 @@ public final class GitHubCardRenderer {
     }
     private static Font font(float size) { return FONT.deriveFont(Font.PLAIN, size); }
 
-    /** No character, paragraph or page-count cap. Every returned image must be sent, in order. */
-    public List<byte[]> render(GitHubRepository repository, int requestedScale) throws Exception {
+    /** No excerpt, fixed height, or pagination: one PNG and one media reply per repository. */
+    public byte[] render(GitHubRepository repository, int requestedScale) throws Exception {
         int scale = Math.max(1, Math.min(3, requestedScale));
         Path images = Files.createTempDirectory("kami-readme-");
         try {
             String html = documentHtml(repository, images);
-            AtomicReference<List<byte[]>> output = new AtomicReference<>();
+            AtomicReference<byte[]> output = new AtomicReference<>();
             AtomicReference<Exception> error = new AtomicReference<>();
             Runnable paint = () -> {
                 try { output.set(renderDocument(repository, html, scale)); }
@@ -75,7 +77,8 @@ public final class GitHubCardRenderer {
                 .render(Parser.builder().extensions(extensions).build().parse(markdown));
         // Raw HTML is data: strip scripts, forms, CSS imports, embeds and arbitrary file URLs.
         Safelist allowed = Safelist.relaxed().addTags("h1", "h2", "h3", "h4", "h5", "h6", "del", "s", "input")
-                .addAttributes("input", "checked", "type");
+                .addAttributes("input", "checked", "type")
+                .addAttributes("td", "width").addAttributes("th", "width");
         String baseUri = repository.url() + "/blob/" + repository.sha + "/" + repository.readmePath;
         Document document = Jsoup.parse(Jsoup.clean(rendered, baseUri, allowed.preserveRelativeLinks(true)));
         for (Element input : new ArrayList<>(document.select("input"))) input.replaceWith(new Element("span")
@@ -93,12 +96,14 @@ public final class GitHubCardRenderer {
         for (Element image : new ArrayList<>(document.select("img"))) {
             String destination = image.attr("src"), alt = image.attr("alt");
             URI uri = GitHubApi.imageUri(repository, destination);
-            BufferedImage bitmap = uri == null || api == null ? null : api.asset(uri.toString());
+            BufferedImage bitmap = uri == null ? null : imageLoader.load(uri.toString());
             if (bitmap == null) {
                 image.replaceWith(new Element("span").text("[图片" + (alt.isBlank() ? "" : "：" + alt) + "] " + destination));
                 continue;
             }
-            int width = Math.min(BODY_WIDTH - 12, bitmap.getWidth());
+            int available = imageContainerWidth(image);
+            int requestedWidth = length(image.attr("width"), available, available);
+            int width = Math.max(1, Math.min(Math.min(available, requestedWidth), bitmap.getWidth()));
             int height = Math.max(1, Math.round((float) bitmap.getHeight() * width / bitmap.getWidth()));
             if (height > 1000) { width = Math.max(1, width * 1000 / height); height = 1000; }
             Path file = images.resolve("image-" + imageIndex++ + ".png");
@@ -113,7 +118,7 @@ public final class GitHubCardRenderer {
             String text = pre.wholeText();
             StringBuilder wrapped = new StringBuilder();
             for (String line : text.split("\n", -1)) {
-                for (String part : wrap(graphics.getFontMetrics(), line, BODY_WIDTH - 36)) wrapped.append(part).append('\n');
+                for (String part : wrap(graphics.getFontMetrics(), line, Math.max(1, imageContainerWidth(pre) - 24))) wrapped.append(part).append('\n');
             }
             pre.text(wrapped.toString());
         }
@@ -122,7 +127,43 @@ public final class GitHubCardRenderer {
         return document.outerHtml();
     }
 
-    private List<byte[]> renderDocument(GitHubRepository repository, String html, int scale) throws Exception {
+    private static int imageContainerWidth(Element element) {
+        List<Element> cells = new ArrayList<>();
+        for (Element ancestor = element.parent(); ancestor != null; ancestor = ancestor.parent())
+            if (ancestor.normalName().equals("td") || ancestor.normalName().equals("th")) cells.add(ancestor);
+        Collections.reverse(cells);
+        int available = BODY_WIDTH - 12;
+        for (Element cell : cells) {
+            Element table = cell.closest("table");
+            if (table == null) continue;
+            int columns = 1;
+            for (Element row : table.select("tr")) {
+                if (row.closest("table") != table) continue;
+                int rowColumns = 0;
+                for (Element peer : row.children())
+                    if (peer.normalName().equals("td") || peer.normalName().equals("th")) rowColumns += span(peer);
+                columns = Math.max(columns, rowColumns);
+            }
+            int share = available * Math.min(span(cell), columns) / columns;
+            int declared = length(cell.attr("width"), available, share);
+            available = Math.max(1, Math.min(share, declared) - 18); // padding, borders and table spacing
+        }
+        return available;
+    }
+    private static int span(Element cell) {
+        try { return Math.max(1, Math.min(1000, Integer.parseInt(cell.attr("colspan")))); }
+        catch (NumberFormatException e) { return 1; }
+    }
+    private static int length(String value, int reference, int fallback) {
+        try {
+            String normalized = value.trim();
+            double number = Double.parseDouble(normalized.replace("%", "").replace("px", ""));
+            double pixels = normalized.endsWith("%") ? reference * number / 100 : number;
+            return Double.isFinite(pixels) && pixels > 0 ? Math.max(1, (int) Math.min(reference, pixels)) : fallback;
+        } catch (NumberFormatException e) { return fallback; }
+    }
+
+    private byte[] renderDocument(GitHubRepository repository, String html, int scale) throws Exception {
         JEditorPane pane = new JEditorPane();
         HTMLEditorKit kit = new HTMLEditorKit() {
             private final ViewFactory factory = new HTMLFactory() {
@@ -158,66 +199,29 @@ public final class GitHubCardRenderer {
         pane.setFont(font(14)); pane.setText(html); pane.setSize(BODY_WIDTH, Integer.MAX_VALUE / 64);
         int documentHeight = Math.max(1, pane.getPreferredSize().height);
         pane.setSize(BODY_WIDTH, documentHeight);
-        List<Rectangle2D> lines = lineBounds(pane);
-        List<byte[]> result = new ArrayList<>();
-        int offset = 0, page = 0;
-        do {
-            int bodyTop = page == 0 ? firstBodyTop(repository) : 116;
-            int budget = Math.max(80, PAGE_HEIGHT - bodyTop - 42);
-            int end = Math.min(documentHeight, offset + budget);
-            if (end < documentHeight) end = safeBreak(lines, offset, end);
-            int height = bodyTop + end - offset + 42;
-            BufferedImage canvas = new BufferedImage(WIDTH * scale, height * scale, BufferedImage.TYPE_INT_RGB);
-            Graphics2D g = canvas.createGraphics();
-            g.scale(scale, scale);
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-            g.setColor(BG); g.fillRect(0, 0, WIDTH, height);
-            int frameTop = page == 0 ? titleHeight(repository) : 66;
-            panel(g, 14, frameTop, WIDTH - 28, height - frameTop - 14, 14, new Color(0x292926));
-            int readmeTop;
-            if (page == 0) { drawHeader(g, repository); readmeTop = bodyTop - 44; }
-            else {
-                text(g, repository.name + " · README（续）", 25, FG, 30, 43);
-                readmeTop = 76;
-            }
-            panel(g, 24, readmeTop, WIDTH - 48, height - readmeTop - 24, 11, PANEL);
-            text(g, repository.readmePath, 12, MUTED, BODY_X, readmeTop + 24);
-            Shape clip = g.getClip();
-            g.clip(new Rectangle(BODY_X, bodyTop, BODY_WIDTH, end - offset));
-            g.translate(BODY_X, bodyTop - offset); pane.paint(g); g.translate(-BODY_X, -(bodyTop - offset));
-            g.setClip(clip);
-            text(g, "github.com / " + repository.fullName() + " · " + (page + 1), 11, MUTED, BODY_X, height - 24);
-            g.dispose();
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); ImageIO.write(canvas, "png", bytes);
-            result.add(bytes.toByteArray()); offset = end; page++;
-        } while (offset < documentHeight);
-        return result;
-    }
-
-    private static List<Rectangle2D> lineBounds(JEditorPane pane) throws BadLocationException {
-        List<Rectangle2D> lines = new ArrayList<>();
-        double lastY = -1, lastHeight = -1;
-        for (int position = 0; position <= pane.getDocument().getLength(); position++) {
-            Rectangle2D bounds = pane.modelToView2D(position);
-            if (bounds != null && (bounds.getY() != lastY || bounds.getHeight() != lastHeight)) {
-                lines.add(bounds); lastY = bounds.getY(); lastHeight = bounds.getHeight();
-            }
-        }
-        return lines;
-    }
-    private static int safeBreak(List<Rectangle2D> lines, int start, int desired) {
-        int end = desired;
-        boolean adjusted;
-        do {
-            adjusted = false;
-            for (Rectangle2D line : lines) if (line.getMinY() < end && line.getMaxY() > end) {
-                int candidate = (int) Math.floor(line.getMinY());
-                if (candidate > start && candidate < end) { end = candidate; adjusted = true; }
-            }
-        } while (adjusted);
-        return end;
+        int bodyTop = firstBodyTop(repository);
+        int height = Math.addExact(Math.addExact(bodyTop, documentHeight), 54);
+        BufferedImage canvas = new BufferedImage(Math.multiplyExact(WIDTH, scale), Math.multiplyExact(height, scale), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = canvas.createGraphics();
+        g.scale(scale, scale);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setColor(BG); g.fillRect(0, 0, WIDTH, height);
+        int frameTop = titleHeight(repository);
+        panel(g, 14, frameTop, WIDTH - 28, height - frameTop - 14, 14, new Color(0x292926));
+        drawHeader(g, repository);
+        int readmeTop = bodyTop - 44;
+        panel(g, 24, readmeTop, WIDTH - 48, height - readmeTop - 24, 11, PANEL);
+        text(g, repository.readmePath, 12, MUTED, BODY_X, readmeTop + 24);
+        Shape clip = g.getClip();
+        g.clip(new Rectangle(BODY_X, bodyTop, BODY_WIDTH, documentHeight));
+        g.translate(BODY_X, bodyTop); pane.paint(g); g.translate(-BODY_X, -bodyTop);
+        g.setClip(clip);
+        text(g, "github.com / " + repository.fullName(), 11, MUTED, BODY_X, height - 34);
+        g.dispose();
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); ImageIO.write(canvas, "png", bytes);
+        return bytes.toByteArray();
     }
 
     private static int titleHeight(GitHubRepository repository) {
