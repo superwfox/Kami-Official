@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 
 /** Fetch and render off the WebSocket thread; duplicate delivery never produces duplicate cards. */
 final class GitHubCardHandler implements AutoCloseable {
-    interface Preview { List<byte[]> render(String repository) throws Exception; }
+    interface Preview { byte[] render(String repository) throws Exception; }
     interface Sender { void send(String messagesPath, String filesPath, String msgId, byte[] png) throws Exception; }
     interface ErrorSender { void send(String messagesPath, String msgId, String message) throws Exception; }
     private final Preview preview;
@@ -43,10 +43,8 @@ final class GitHubCardHandler implements AutoCloseable {
         try {
             workers.execute(() -> {
                 try {
-                    for (byte[] page : preview.render(repository)) {
-                        if (Thread.currentThread().isInterrupted()) return;
-                        sender.send(messagesPath, filesPath, msgId, page);
-                    }
+                    byte[] png = preview.render(repository);
+                    if (!Thread.currentThread().isInterrupted()) sender.send(messagesPath, filesPath, msgId, png);
                 } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 catch (Exception e) {
                     System.err.println("[GitHub] 仓库卡片处理失败：" + e.getClass().getSimpleName());
