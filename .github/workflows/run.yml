@@ -68,6 +68,8 @@ jobs:
 
       - name: Run bot
         id: run
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           MINUTES="${{ github.event.inputs.minutes }}"
           MINUTES="${MINUTES:-300}"

@@ -24,6 +24,10 @@ public class Config {
     /** 卡片超采样倍率，越大越清晰、越大越慢。 */
     public int renderScale;
 
+    /** 收到图片附件时自动验证 OpenAI 来源；没有 API Key 时不启用。 */
+    public boolean aiImageCheckEnabled = true;
+    public String openaiApiKey;
+
     public static Config load(String path) throws Exception {
         Yaml yaml = new Yaml();
         try (InputStream in = Files.newInputStream(Path.of(path))) {
@@ -40,6 +44,8 @@ public class Config {
             c.ttdmApiBase = str(data.getOrDefault("ttdmApiBase", "https://ttdm.space"));
             c.assetDir = str(data.getOrDefault("assetDir", "public"));
             c.renderScale = Integer.parseInt(str(data.getOrDefault("renderScale", "2")));
+            c.aiImageCheckEnabled = Boolean.parseBoolean(str(data.getOrDefault("aiImageCheckEnabled", "true")));
+            c.openaiApiKey = System.getenv("OPENAI_API_KEY");
             return c;
 
         }

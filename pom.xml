@@ -19,6 +19,12 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
         <!-- WebSocket 客户端 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
@@ -58,6 +64,11 @@
             </resource>
         </resources>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+            </plugin>
             <!-- 打成可直接运行的 fat-jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

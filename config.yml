@@ -14,3 +14,7 @@ sandbox: false
 
 # 收到 “logo” 时发送的图片地址（必须是公网可访问的直链）
 logoUrl: "https://github.com/superwfox/minecraft-dev/blob/master/public/silver.png?raw=true"
+
+# 自动检查收到的 PNG / JPEG / WebP 图片，检测到 OpenAI 来源时回复原消息。
+# 启用前在运行环境设置 OPENAI_API_KEY；未配置 Key 时自动跳过，不影响其它功能。
+aiImageCheckEnabled: true
