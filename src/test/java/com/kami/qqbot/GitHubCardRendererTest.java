@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.awt.image.BufferedImage;
 import java.awt.Color;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import org.jsoup.Jsoup;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,11 +41,55 @@ class GitHubCardRendererTest {
         assertEquals(101,GitHubCardRenderer.contributorRows(101).stream().mapToInt(Integer::intValue).sum());
     }
 
+    @Test void codeBlocksKeepTheirLanguageAndIntentionalWhitespaceWithoutAnExtraEmptyRow() throws Exception {
+        String source = "```bash title=example\n  echo first\n\n  echo last\n```\n\n```\nplain\n```";
+        var html = Jsoup.parse(new GitHubCardRenderer(null).documentHtml(GitHubApiTest.fixture(source), directory));
+        var blocks = html.select("pre");
+        assertEquals(2, blocks.size());
+        assertEquals("BASH", blocks.get(0).attr("title"));
+        assertEquals("  echo first\n\n  echo last", blocks.get(0).wholeText());
+        assertEquals("文本", blocks.get(1).attr("title"));
+        assertEquals("plain", blocks.get(1).wholeText());
+    }
+
     @Test void unbrokenLongTextWrapsWithinOneTallImage() throws Exception {
         String text = "abcdefghijklmnopqrstuvwxyz".repeat(600) + "END_OF_LONG_LINE";
         GitHubCardRenderer renderer = new GitHubCardRenderer(null);
         assertTrue(renderer.documentHtml(GitHubApiTest.fixture(text), directory).contains("END_OF_LONG_LINE"));
         assertTrue(ImageIO.read(new ByteArrayInputStream(renderer.render(GitHubApiTest.fixture(text), 1))).getHeight() > 2000);
+    }
+
+    @Test void profilePicturesChooseDarkArtworkAndKeepTheRightImageBesideTheText() throws Exception {
+        String source = "<img align=\"right\" width=\"47%\" src=\"art.webp\" alt=\"Art\">\n\n"
+                + "<picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"dark.svg\"><img width=\"48%\" src=\"light.svg\" alt=\"Wordmark\"></picture>\n\n"
+                + "## AI SYSTEMS\n\nPlanning · Memory · Telemetry  \nRecovery · Delivery\n\n"
+                + "<br clear=\"right\">\n\n---\n\nEND_OF_README";
+        List<String> requests = new ArrayList<>();
+        GitHubCardRenderer renderer = new GitHubCardRenderer(null, url -> {
+            requests.add(url);
+            if (url.endsWith("dark.svg")) {
+                try { return GitHubImageDecoder.decode("<svg xmlns='http://www.w3.org/2000/svg' width='120' height='20'><rect width='120' height='20' fill='#00cbd6'/></svg>".getBytes(StandardCharsets.UTF_8)); }
+                catch (java.io.IOException e) { throw new AssertionError(e); }
+            }
+            BufferedImage image = new BufferedImage(300,250,BufferedImage.TYPE_INT_RGB);
+            var graphics = image.createGraphics(); graphics.setColor(new Color(0x1122ff)); graphics.fillRect(0,0,300,250); graphics.dispose();
+            return image;
+        });
+        var html = Jsoup.parse(renderer.documentHtml(GitHubApiTest.fixture(source),directory));
+        assertEquals(1,html.select("table.readme-float").size());
+        assertEquals(2,html.select("img").size());
+        assertTrue(requests.stream().anyMatch(url -> url.endsWith("dark.svg")));
+        assertFalse(requests.stream().anyMatch(url -> url.endsWith("light.svg")));
+        assertTrue(html.text().contains("END_OF_README"));
+        BufferedImage output = ImageIO.read(new ByteArrayInputStream(renderer.render(GitHubApiTest.fixture(source),1)));
+        int cyanRight = -1, blueLeft = output.getWidth(), blueRight = -1, bluePixels = 0;
+        for(int y=0;y<output.getHeight();y++)for(int x=0;x<output.getWidth();x++){
+            int color=output.getRGB(x,y)&0xffffff;
+            if(color==0x00cbd6)cyanRight=Math.max(cyanRight,x);
+            if(color==0x1122ff){blueLeft=Math.min(blueLeft,x);blueRight=Math.max(blueRight,x);bluePixels++;}
+        }
+        assertTrue(cyanRight>0); assertTrue(cyanRight<blueLeft);
+        assertTrue(blueRight<672); assertTrue(bluePixels>40000);
     }
 
     @Test void threeImagesInOneHtmlTableRowAreAllVisibleWithoutHorizontalCropping() throws Exception {
@@ -74,5 +120,18 @@ class GitHubCardRendererTest {
             if(previousTop>=0)assertEquals(previousTop,top);
             previousRight=right;previousTop=top;
         }
+    }
+
+    @Test void paragraphsAfterAShortFloatReturnToTheFullBodyWidth() throws Exception {
+        String source = "<img align=\"right\" width=\"47%\" src=\"banner.png\">\n\n"
+                + "## Heading beside the image\n\nFull-width paragraph after the image.\n\nAnother complete paragraph.\n\n<br clear=\"right\">";
+        GitHubCardRenderer renderer = new GitHubCardRenderer(null, url -> new BufferedImage(300,30,BufferedImage.TYPE_INT_ARGB));
+        var html = Jsoup.parse(renderer.documentHtml(GitHubApiTest.fixture(source),directory));
+        var layout = html.selectFirst("table.readme-float");
+        assertNotNull(layout);
+        assertTrue(layout.text().contains("Heading beside the image"));
+        assertFalse(layout.text().contains("Full-width paragraph"));
+        assertTrue(layout.nextElementSibling().text().contains("Full-width paragraph"));
+        assertEquals(1,html.select("img").size());
     }
 }

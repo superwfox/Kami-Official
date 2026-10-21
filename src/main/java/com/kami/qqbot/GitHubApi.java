@@ -2,9 +2,6 @@ package com.kami.qqbot;
 
 import com.google.gson.*;
 
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.URI;
@@ -16,7 +13,12 @@ import java.util.regex.*;
 
 /** Public GitHub metadata only. Optional fields never turn an unknown CI result into success. */
 public final class GitHubApi {
-    private static final Pattern LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})(?=$|[/\\s?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})(?=$|[/\\s\\p{Z}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PROFILE_LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/?(?=$|[\\s\\p{Z}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
+    private static final Set<String> SITE_ROUTES = Set.of("about", "apps", "business", "codespaces", "collections", "contact",
+            "customer-stories", "dashboard", "enterprise", "events", "explore", "features", "issues", "join", "login", "logout",
+            "marketplace", "new", "notifications", "organizations", "orgs", "pricing", "pulls", "readme", "search", "security",
+            "settings", "signup", "sponsors", "stars", "topics", "trending", "users", "watching");
     private static final Pattern BUILD_NAME = Pattern.compile("(?iu)(^|[^a-z])(build|ci|test|tests|verify|check|checks|lint)([^a-z]|$)|构建|测试|检查");
     private final HttpClient http;
     private final URI base;
@@ -33,15 +35,27 @@ public final class GitHubApi {
         this.http = http; this.base = base; this.token = token; this.clock = clock;
     }
 
-    /** Recognize repository links inside ordinary messages, including /tree, /issues and /blob links. */
+    /** Repository links and personal profile links; profiles resolve to the same-name README repository. */
     public static String repositoryIn(String text) {
-        Matcher matcher = LINK.matcher(text == null ? "" : text);
+        String content = text == null ? "" : text;
+        Matcher matcher = LINK.matcher(content);
+        String repository = null;
+        int position = Integer.MAX_VALUE;
         while (matcher.find()) {
             String name = matcher.group(2);
             if (name.endsWith(".git")) name = name.substring(0, name.length() - 4);
-            if (!name.isBlank() && !name.equals(".") && !name.equals("..")) return matcher.group(1) + "/" + name;
+            if (!SITE_ROUTES.contains(matcher.group(1).toLowerCase(Locale.ROOT)) && !name.isBlank() && !name.equals(".") && !name.equals("..")) {
+                repository = matcher.group(1) + "/" + name;
+                position = matcher.start();
+                break;
+            }
         }
-        return null;
+        Matcher profile = PROFILE_LINK.matcher(content);
+        while (profile.find() && profile.start() < position) {
+            String login = profile.group(1);
+            if (!SITE_ROUTES.contains(login.toLowerCase(Locale.ROOT))) return login + "/" + login;
+        }
+        return repository;
     }
 
     public GitHubRepository fetch(String fullName) throws IOException, InterruptedException {
@@ -142,7 +156,11 @@ public final class GitHubApi {
             }
         }
         String[] names = canonical.split("/", 2);
-        GitHubRepository snapshot = new GitHubRepository(names[0], names[1], string(repo, "description", ""), branch, sha,
+        JsonObject owner = repo.getAsJsonObject("owner");
+        String accountPath = "Organization".equals(string(owner, "type", "")) ? "orgs/" : "users/";
+        JsonElement profile = optional(accountPath + names[0]);
+        String ownerName = profile != null && profile.isJsonObject() ? string(profile.getAsJsonObject(), "name", names[0]) : names[0];
+        GitHubRepository snapshot = new GitHubRepository(names[0], ownerName, names[1], string(repo, "description", ""), branch, sha,
                 committed, repo.has("stargazers_count") ? repo.get("stargazers_count").getAsLong() : 0,
                 repo.has("archived") && repo.get("archived").getAsBoolean(), contributors, readme, readmePath,
                 build, buildLabel, clock.instant());
@@ -190,36 +208,30 @@ public final class GitHubApi {
         } catch (IllegalArgumentException e) { return null; }
     }
 
-    /** Only GitHub-managed image hosts and shields.io badges; no credentials, arbitrary hosts or redirects. */
+    /** GitHub image hosts and badge services; no credentials, arbitrary hosts or redirects. */
     public BufferedImage asset(String url) throws InterruptedException {
         try {
             URI uri = URI.create(url);
             String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
             if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getRawUserInfo() != null || uri.getPort() != -1
                     || !Set.of("avatars.githubusercontent.com", "raw.githubusercontent.com", "user-images.githubusercontent.com",
-                    "private-user-images.githubusercontent.com", "github.com", "img.shields.io").contains(host)) return null;
+                    "private-user-images.githubusercontent.com", "camo.githubusercontent.com", "github.com", "img.shields.io",
+                    "badgen.net", "flat.badgen.net").contains(host)) return null;
             HttpRequest request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(8)).header("User-Agent", "Kami-Official-repository-card").GET().build();
-            HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            try (InputStream input = response.body()) {
-                if (response.statusCode() != 200) return null;
-                byte[] bytes = input.readNBytes(10 * 1024 * 1024 + 1);
-                if (bytes.length > 10 * 1024 * 1024) return null;
-                try (ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
-                    Iterator<ImageReader> readers = ImageIO.getImageReaders(stream);
-                    if (!readers.hasNext()) return null;
-                    ImageReader reader = readers.next();
-                    try {
-                        reader.setInput(stream);
-                        int w = reader.getWidth(0), h = reader.getHeight(0);
-                        if (w <= 0 || h <= 0 || (long) w * h > 40_000_000) return null;
-                        var param = reader.getDefaultReadParam();
-                        int sample = Math.max(1, Math.max(w, h) / 1600);
-                        param.setSourceSubsampling(sample, sample, 0, 0);
-                        return reader.read(0, param);
-                    } finally { reader.dispose(); }
-                }
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                    try (InputStream input = response.body()) {
+                        if (response.statusCode() >= 500 && attempt == 0) continue;
+                        if (response.statusCode() != 200) return null;
+                        byte[] bytes = input.readNBytes(10 * 1024 * 1024 + 1);
+                        if (bytes.length > 10 * 1024 * 1024) return null;
+                        return GitHubImageDecoder.decode(bytes);
+                    }
+                } catch (IOException e) { if (attempt == 1) return null; }
             }
-        } catch (IOException | IllegalArgumentException e) { return null; }
+            return null;
+        } catch (IllegalArgumentException e) { return null; }
     }
 
     private JsonElement get(String path) throws IOException, InterruptedException { return get(path, false); }

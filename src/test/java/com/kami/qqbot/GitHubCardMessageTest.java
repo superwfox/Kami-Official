@@ -3,7 +3,7 @@ package com.kami.qqbot;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -11,8 +11,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class GitHubCardMessageTest {
     @ParameterizedTest
-    @ValueSource(strings={"GROUP_AT_MESSAGE_CREATE","GROUP_MESSAGE_CREATE","C2C_MESSAGE_CREATE"})
-    void realDispatcherSendsExactlyOneFullImageWithoutDuplicateDelivery(String event) throws Exception {
+    @CsvSource({
+            "GROUP_AT_MESSAGE_CREATE, https://github.com/superwfox/Kami-Official, superwfox/Kami-Official",
+            "GROUP_MESSAGE_CREATE, https://github.com/superwfox/Kami-Official, superwfox/Kami-Official",
+            "C2C_MESSAGE_CREATE, https://github.com/superwfox/Kami-Official, superwfox/Kami-Official",
+            "GROUP_AT_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox",
+            "GROUP_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox",
+            "C2C_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox"
+    })
+    void realDispatcherSendsExactlyOneFullImageWithoutDuplicateDelivery(String event, String link, String expectedRepository) throws Exception {
         Config config = new Config(); config.assetDir="public"; config.aiImageCheckEnabled=false;
         List<String> messages=new CopyOnWriteArrayList<>(); List<Integer> sequences=new CopyOnWriteArrayList<>();
         CountDownLatch sent=new CountDownLatch(1); AtomicInteger queries=new AtomicInteger();
@@ -22,9 +29,9 @@ class GitHubCardMessageTest {
             @Override public void sendMedia(String messagesPath,String fileInfo,String id,int seq){assertEquals(path+"/messages",messagesPath);assertEquals("original",id);messages.add(fileInfo);sequences.add(seq);sent.countDown();}
         };
         try(MessageHandler handler=new MessageHandler(api,config,null,repository->{
-            assertEquals("superwfox/Kami-Official",repository);queries.incrementAndGet();return new byte[]{1};
+            assertEquals(expectedRepository,repository);queries.incrementAndGet();return new byte[]{1};
         })){
-            JsonObject message=JsonParser.parseString("{\"id\":\"original\",\"group_openid\":\"group\",\"author\":{\"member_openid\":\"user\",\"user_openid\":\"user\"},\"content\":\"看看 https://github.com/superwfox/Kami-Official\"}").getAsJsonObject();
+            JsonObject message=JsonParser.parseString("{\"id\":\"original\",\"group_openid\":\"group\",\"author\":{\"member_openid\":\"user\",\"user_openid\":\"user\"},\"content\":\"看看 " + link + "\"}").getAsJsonObject();
             handler.onEvent(event,message);handler.onEvent(event,message);
             assertTrue(sent.await(4,TimeUnit.SECONDS));assertEquals(List.of("file-1"),messages);assertEquals(1,sequences.stream().distinct().count());assertEquals(1,queries.get());
         }

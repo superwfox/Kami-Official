@@ -8,18 +8,19 @@ import java.util.List;
 public final class GitHubRepository {
     public enum BuildState { SUCCESS, FAILURE, NONE }
 
-    public final String owner, name, description, branch, sha, readme, readmePath, buildLabel;
+    public final String owner, ownerName, name, description, branch, sha, readme, readmePath, buildLabel;
     public final long stars;
     public final boolean archived;
     public final Instant committedAt, fetchedAt;
     public final List<Contributor> contributors;
     public final BuildState buildState;
 
-    public GitHubRepository(String owner, String name, String description, String branch, String sha,
+    public GitHubRepository(String owner, String ownerName, String name, String description, String branch, String sha,
                             Instant committedAt, long stars, boolean archived, List<Contributor> contributors,
                             String readme, String readmePath, BuildState buildState, String buildLabel,
                             Instant fetchedAt) {
-        this.owner = owner; this.name = name; this.description = description; this.branch = branch;
+        this.owner = owner; this.ownerName = ownerName == null || ownerName.isBlank() ? owner : ownerName.strip();
+        this.name = name; this.description = description; this.branch = branch;
         this.sha = sha; this.committedAt = committedAt; this.stars = stars; this.archived = archived;
         this.contributors = List.copyOf(contributors); this.readme = readme; this.readmePath = readmePath;
         this.buildState = buildState; this.buildLabel = buildLabel; this.fetchedAt = fetchedAt;
