@@ -43,3 +43,31 @@ Key 不写入仓库或日志。没有 Key 时只禁用这项检测，其它指�
 `mvn clean verify` 会运行本地 HTTP 模拟服务测试，检查原图 multipart 上传、来源结果判定、响应大小限制、限流冷却、消息去重和原消息回复。测试不会调用 OpenAI，也不发送真实 QQ 消息；上线前仍需用有效 Key 和 QQ 测试群验证实际权限及回调。
 
 参考：[OpenAI API 文档](https://developers.openai.com/api/docs/guides/content-provenance)、[OpenAI 免费与使用限额说明](https://help.openai.com/en/articles/8912793-provenance-signals-in-openai-generated-content)、[Google API 开放范围](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/ai-content-detection)、[QQ 消息发送文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)。
+
+## GitHub 仓库卡片
+
+在群聊（含 @ 机器人）或 C2C 私聊中分享 `https://github.com/owner/repo`，机器人会在后台生成钉钉进步体、暖灰暗色的仓库图片卡片。分支、文件、Issue 等仓库子链接同样识别为对应仓库，使用该仓库默认分支的数据。一条消息解析第一个仓库链接，重复投递不会重复回复。
+
+卡片包含仓库名称、`所有者 | 贡献者`、圆角矩形头像、短 commit hash、Star 和最后提交时间。头像首行最多 7 个，后续每行最多 12 个并右对齐；20 人为 `7 + 12 + 1`，继续读取 GitHub 返回的后续贡献者页。Star **严格大于 1,000** 时显示 `HOT`，最后提交距查询时不超过 **18 小时**时显示 `NEW`。归档仓库显示 `Archived` 和只读提示，空仓库显示“暂无提交”，缺失或暂时不可读取的 README 使用仓库描述及说明。
+
+commit hash 后的绿色长尾勾表示该提交的构建成功，红叉表示失败。优先读取名称含 Build / CI / Test / Verify / Check / Lint 或“构建 / 测试 / 检查”的工作流，并按工作流选择最新运行及重试；这使本仓库的 `Build` 与常驻的 `Run Bot` 分开判断。没有匹配的构建工作流时合并 Check Runs 和传统 Commit Status。没有结果、权限不足、仍在运行、取消或全部跳过时不显示成功标记。README 和构建结果都固定到所显示的同一个 commit。
+
+**README 不做字符数、段落数或页数截断。** Markdown 标题、段落、列表、引用、代码块和表格转换为图片；长代码自动折行，超长正文连续分页发送全部图片。分页尽量避开文字行，不用省略号或“摘选”代替正文。README 图片只从 GitHub 图片域名和 shields.io 获取；无法读取的图片显示替代文字和原地址，HTML 脚本、嵌入和本地文件不执行、不读取。
+
+默认配置：
+
+```yaml
+githubCardEnabled: true
+```
+
+可以在运行环境设置 `GITHUB_TOKEN` 提升公开仓库的 API 额度；不把 Token 写进配置、卡片或日志，也不在群聊中展示私有仓库。`Run Bot` 工作流自动提供只读 Token（`contents: read`、`actions: read`）。未设置 Token 时使用 GitHub 的匿名额度。仓库快照缓存 5 分钟，后台最多 2 个任务、8 个排队任务。
+
+本地用真实仓库预览，不启动 QQ 连接、不发送消息：
+
+```bash
+mvn clean verify
+java -Djava.awt.headless=true -cp target/kami-qqbot.jar \
+  com.kami.qqbot.GitHubCardPreview superwfox/Kami-Official target/github-preview
+```
+
+输出目录含按顺序编号的全部 PNG 及未经截断的 `README-source.md`。Linux 无图形界面同样可用，字体随 JAR 打包，不依赖 Chromium 或宿主机预装字体。群聊和私聊分发、完整 README、贡献者分页、CI 状态与超长渲染在本地模拟 HTTP / QQ 接口中测试，QQ 客户端的最终富媒体显示仍需在测试群验证。
