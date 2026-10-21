@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Claude-like dark cards: one dynamically sized PNG containing the complete README. */
 public final class GitHubCardRenderer {
     private static final int WIDTH = 720, BODY_X = 48, BODY_WIDTH = WIDTH - 96;
+    private static final int CODE_PAD_X = 12, CODE_PAD_TOP = 24, CODE_PAD_BOTTOM = 7;
     private static final Color BG = new Color(0x262624), PANEL = new Color(0x30302c), BORDER = new Color(0x45443f);
     private static final Color FG = new Color(0xe9e5dc), MUTED = new Color(0xaaa79e), GREEN = new Color(0xb6ceb8), RED = new Color(0xe3a199);
     private static final Font FONT = loadFont();
@@ -45,6 +46,7 @@ public final class GitHubCardRenderer {
         } catch (Exception e) { throw new IllegalStateException("仓库卡片字体加载失败", e); }
     }
     private static Font font(float size) { return FONT.deriveFont(Font.PLAIN, size); }
+    private static Font boldFont(float size) { return FONT.deriveFont(Font.BOLD, size); }
 
     /** No excerpt, fixed height, or pagination: one PNG and one media reply per repository. */
     public byte[] render(GitHubRepository repository, int requestedScale) throws Exception {
@@ -75,12 +77,18 @@ public final class GitHubCardRenderer {
         var extensions = List.of(TablesExtension.create());
         String rendered = HtmlRenderer.builder().extensions(extensions).build()
                 .render(Parser.builder().extensions(extensions).build().parse(markdown));
+        Document source = Jsoup.parse(rendered);
+        selectDarkPictures(source);
         // Raw HTML is data: strip scripts, forms, CSS imports, embeds and arbitrary file URLs.
-        Safelist allowed = Safelist.relaxed().addTags("h1", "h2", "h3", "h4", "h5", "h6", "del", "s", "input")
+        Safelist allowed = Safelist.relaxed().addTags("h1", "h2", "h3", "h4", "h5", "h6", "del", "s", "input", "div", "kbd", "sub", "sup")
                 .addAttributes("input", "checked", "type")
+                .addAttributes("code", "class")
+                .addAttributes("img", "align").addAttributes("p", "align").addAttributes("div", "align")
+                .addAttributes("br", "clear")
                 .addAttributes("td", "width").addAttributes("th", "width");
         String baseUri = repository.url() + "/blob/" + repository.sha + "/" + repository.readmePath;
-        Document document = Jsoup.parse(Jsoup.clean(rendered, baseUri, allowed.preserveRelativeLinks(true)));
+        Document document = Jsoup.parse(Jsoup.clean(source.body().html(), baseUri, allowed.preserveRelativeLinks(true)));
+        arrangeFloats(document);
         for (Element input : new ArrayList<>(document.select("input"))) input.replaceWith(new Element("span")
                 .text(input.hasAttr("checked") ? "[x] " : "[ ] "));
         for (Element link : document.select("a[href]")) {
@@ -103,28 +111,124 @@ public final class GitHubCardRenderer {
             }
             int available = imageContainerWidth(image);
             int requestedWidth = length(image.attr("width"), available, available);
-            int width = Math.max(1, Math.min(Math.min(available, requestedWidth), bitmap.getWidth()));
-            int height = Math.max(1, Math.round((float) bitmap.getHeight() * width / bitmap.getWidth()));
+            int width = Math.max(1, Math.min(Math.min(available, requestedWidth), GitHubImageDecoder.width(bitmap)));
+            int height = Math.max(1, Math.round((float) GitHubImageDecoder.height(bitmap) * width / GitHubImageDecoder.width(bitmap)));
             if (height > 1000) { width = Math.max(1, width * 1000 / height); height = 1000; }
             Path file = images.resolve("image-" + imageIndex++ + ".png");
             ImageIO.write(bitmap, "png", file.toFile());
             image.attr("src", file.toUri().toString()).attr("width", Integer.toString(width)).attr("height", Integer.toString(height));
         }
-        for (Element table : document.select("table")) table.attr("width", "100%").attr("cellspacing", "0").attr("cellpadding", "6");
+        for (Element table : document.select("table")) table.attr("width", "100%").attr("cellspacing", "0")
+                .attr("cellpadding", table.hasClass("readme-float") ? "0" : "6");
         // Swing's <pre> does not wrap long lines; insert visual line breaks without removing characters.
         BufferedImage metricsImage = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = metricsImage.createGraphics(); graphics.setFont(font(14));
+        Graphics2D graphics = metricsImage.createGraphics(); graphics.setFont(font(13));
         for (Element pre : document.select("pre")) {
+            Element code = pre.selectFirst("code");
+            String language = code == null ? "" : code.classNames().stream()
+                    .filter(name -> name.startsWith("language-")).map(name -> name.substring(9)).findFirst().orElse("");
             String text = pre.wholeText();
-            StringBuilder wrapped = new StringBuilder();
+            // The fence's final newline terminates its last line; it is not an extra empty row.
+            if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
+            List<String> wrapped = new ArrayList<>();
             for (String line : text.split("\n", -1)) {
-                for (String part : wrap(graphics.getFontMetrics(), line, Math.max(1, imageContainerWidth(pre) - 24))) wrapped.append(part).append('\n');
+                wrapped.addAll(wrap(graphics.getFontMetrics(), line, Math.max(1, imageContainerWidth(pre) - CODE_PAD_X * 2)));
             }
-            pre.text(wrapped.toString());
+            pre.attr("title", language.isBlank() ? "文本" : language.toUpperCase(Locale.ROOT)).text(String.join("\n", wrapped));
         }
         graphics.dispose();
+        fitFloats(document);
         document.outputSettings().prettyPrint(false);
         return document.outerHtml();
+    }
+
+    private static void selectDarkPictures(Document document) {
+        for (Element picture : new ArrayList<>(document.select("picture"))) {
+            Element fallback = picture.selectFirst("img");
+            if (fallback == null) { picture.remove(); continue; }
+            Element chosen = null;
+            for (Element candidate : picture.select("source[srcset]")) {
+                String media = candidate.attr("media").replaceAll("\\s", "").toLowerCase(Locale.ROOT);
+                if (media.contains("prefers-color-scheme:dark")) { chosen = candidate; break; }
+                if (media.isEmpty() && chosen == null) chosen = candidate;
+            }
+            Element image = fallback.clone();
+            if (chosen != null) image.attr("src", chosen.attr("srcset").split(",")[0].trim().split("\\s+")[0]);
+            picture.replaceWith(image);
+        }
+        for (Element image : new ArrayList<>(document.select("img")))
+            if (image.attr("src").endsWith("#gh-light-mode-only")) image.remove();
+    }
+
+    /** Swing has no floats. Translate the README's image/clear groups into borderless layout tables. */
+    private static void arrangeFloats(Document document) {
+        for (Element image : new ArrayList<>(document.select("img[align=right], img[align=left]"))) {
+            boolean right = image.attr("align").equalsIgnoreCase("right");
+            Element start = image;
+            if (start.parent() != null && start.parent().normalName().equals("a")) start = start.parent();
+            if (start.parent() != null && start.parent().normalName().equals("p")
+                    && start.parent().childrenSize() == 1 && start.parent().text().isBlank()) start = start.parent();
+            int available = imageContainerWidth(start), gap = 16;
+            if (available < 160) { image.removeAttr("align"); continue; }
+            int imageWidth = Math.min(length(image.attr("width"), available, available / 2), available - 96);
+            int textWidth = Math.max(1, available - imageWidth - gap);
+            List<Element> content = new ArrayList<>();
+            Element end = null;
+            for (Element next = start.nextElementSibling(); next != null; next = next.nextElementSibling()) {
+                if (clearBreak(next) || next.normalName().equals("hr") || next.is("img[align=right], img[align=left]")) { end = next; break; }
+                content.add(next);
+            }
+            image.removeAttr("align").attr("width", Integer.toString(imageWidth));
+            if (content.isEmpty()) continue;
+            for (Element element : content) for (Element child : element.getAllElements())
+                if (child.normalName().equals("img") && child.attr("width").endsWith("%"))
+                    child.attr("width", Integer.toString(length(child.attr("width"), available, textWidth)));
+            Element table = new Element("table").addClass("readme-float").attr("border", "0")
+                    .attr("data-float-side", right ? "right" : "left");
+            Element row = table.appendElement("tr");
+            Element first = layoutCell(row, right ? textWidth : imageWidth);
+            layoutCell(row, gap).html("&nbsp;");
+            Element last = layoutCell(row, right ? imageWidth : textWidth);
+            start.before(table);
+            (right ? last : first).appendChild(start);
+            for (Element element : content) (right ? first : last).appendChild(element);
+            if (end != null && clearBreak(end)) end.remove();
+        }
+    }
+    private static Element layoutCell(Element row, int width) {
+        return row.appendElement("td").attr("width", Integer.toString(width)).attr("valign", "top")
+                .attr("style", "border: 0; padding: 0;");
+    }
+    private static boolean clearBreak(Element element) {
+        return element.is("br[clear]") || element.normalName().equals("p") && element.text().isBlank() && element.selectFirst("br[clear]") != null;
+    }
+
+    /** Return following blocks to the full body width once the floated image has ended. */
+    private static void fitFloats(Document document) throws Exception {
+        if (document.select("table.readme-float").isEmpty()) return;
+        Runnable fit = () -> {
+            for (Element table : new ArrayList<>(document.select("table.readme-float"))) {
+                Element row = table.selectFirst("tr");
+                if (row == null || row.childrenSize() != 3) continue;
+                boolean right = table.attr("data-float-side").equals("right");
+                Element content = row.child(right ? 0 : 2), artwork = row.child(right ? 2 : 0).selectFirst("img");
+                if (artwork == null) continue;
+                int height = length(artwork.attr("height"), Integer.MAX_VALUE, Integer.MAX_VALUE);
+                int width = length(content.attr("width"), BODY_WIDTH, BODY_WIDTH / 2);
+                List<Element> blocks = new ArrayList<>(content.children());
+                StringBuilder prefix = new StringBuilder(); int keep = 0;
+                for (Element block : blocks) {
+                    prefix.append(block.outerHtml()); keep++;
+                    if (readmePane(prefix.toString(), width).getHeight() >= height) break;
+                }
+                Element after = table;
+                for (int index = keep; index < blocks.size(); index++) {
+                    Element block = blocks.get(index); after.after(block); after = block;
+                }
+                table.removeAttr("data-float-side");
+            }
+        };
+        if (SwingUtilities.isEventDispatchThread()) fit.run(); else SwingUtilities.invokeAndWait(fit);
     }
 
     private static int imageContainerWidth(Element element) {
@@ -136,6 +240,7 @@ public final class GitHubCardRenderer {
         for (Element cell : cells) {
             Element table = cell.closest("table");
             if (table == null) continue;
+            if (table.hasClass("readme-float")) { available = length(cell.attr("width"), available, available); continue; }
             int columns = 1;
             for (Element row : table.select("tr")) {
                 if (row.closest("table") != table) continue;
@@ -163,14 +268,16 @@ public final class GitHubCardRenderer {
         } catch (NumberFormatException e) { return fallback; }
     }
 
-    private byte[] renderDocument(GitHubRepository repository, String html, int scale) throws Exception {
+    private static JEditorPane readmePane(String html, int width) {
         JEditorPane pane = new JEditorPane();
         HTMLEditorKit kit = new HTMLEditorKit() {
             private final ViewFactory factory = new HTMLFactory() {
                 @Override public View create(javax.swing.text.Element element) {
+                    if (element.getAttributes().getAttribute(StyleConstants.NameAttribute) == HTML.Tag.PRE)
+                        return new CodeBlockView(element);
                     View view = super.create(element);
                     if (view instanceof ImageView) ((ImageView) view).setLoadsSynchronously(true);
-                    if (view instanceof InlineView) return new InlineView(element) {
+                    if (view instanceof InlineView && element.getAttributes().getAttribute(StyleConstants.NameAttribute) != HTML.Tag.BR) return new InlineView(element) {
                         @Override public float getMinimumSpan(int axis) {
                             return axis == View.X_AXIS ? 0 : super.getMinimumSpan(axis);
                         }
@@ -183,22 +290,31 @@ public final class GitHubCardRenderer {
         StyleSheet css = kit.getStyleSheet();
         String family = FONT.getFamily(Locale.ROOT);
         css.addRule("body { margin: 0; font-family: '" + family + "'; font-size: 14pt; color: #ccc8be; background-color: #30302c; }");
-        css.addRule("h1 { font-size: 25pt; font-weight: normal; color: #e9e5dc; margin-top: 7px; margin-bottom: 14px; }");
-        css.addRule("h2 { font-size: 20pt; font-weight: normal; color: #e9e5dc; margin-top: 24px; margin-bottom: 12px; }");
-        css.addRule("h3, h4, h5, h6 { font-size: 17pt; color: #e9e5dc; margin-top: 22px; margin-bottom: 10px; }");
+        css.addRule("h1 { font-size: 25pt; font-weight: bold; color: #e9e5dc; margin-top: 7px; margin-bottom: 14px; }");
+        css.addRule("h2 { font-size: 20pt; font-weight: bold; color: #e9e5dc; margin-top: 24px; margin-bottom: 12px; }");
+        css.addRule("h3, h4, h5, h6 { font-size: 17pt; font-weight: bold; color: #e9e5dc; margin-top: 22px; margin-bottom: 10px; }");
         css.addRule("p { margin-top: 0px; margin-bottom: 17px; }");
         css.addRule("a { color: #d4a186; } strong, b { color: #e9e5dc; }");
-        css.addRule("code, pre { font-family: '" + family + "'; font-size: 13pt; color: #d2b09b; background-color: #252523; }");
-        css.addRule("pre { padding: 12px; margin-top: 9px; margin-bottom: 18px; }");
+        css.addRule("code, pre { font-family: '" + family + "'; font-size: 13pt; color: #d2b09b; }");
+        css.addRule("code { background-color: #252523; }");
+        css.addRule("pre { padding: " + CODE_PAD_TOP + "px " + CODE_PAD_X + "px " + CODE_PAD_BOTTOM
+                + "px " + CODE_PAD_X + "px; margin-top: 4px; margin-bottom: 8px; }");
         css.addRule("blockquote { margin-left: 12px; margin-right: 8px; color: #ddc1a9; }");
         css.addRule("ul, ol { margin-left: 23px; } li { margin-bottom: 7px; }");
         css.addRule("td, th { border: 1px solid #45443f; padding: 6px; } hr { color: #45443f; }");
+        css.addRule("table.readme-float { margin-top: 0; margin-bottom: 12px; } table.readme-float td { border: 0; padding: 0; }");
         pane.setEditorKit(kit); pane.setEditable(false); pane.setOpaque(true); pane.setBackground(PANEL);
         pane.setForeground(new Color(0xccc8be));
         pane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
-        pane.setFont(font(14)); pane.setText(html); pane.setSize(BODY_WIDTH, Integer.MAX_VALUE / 64);
+        pane.setFont(font(14)); pane.setText(html); pane.setSize(width, Integer.MAX_VALUE / 64);
         int documentHeight = Math.max(1, pane.getPreferredSize().height);
-        pane.setSize(BODY_WIDTH, documentHeight);
+        pane.setSize(width, documentHeight);
+        return pane;
+    }
+
+    private byte[] renderDocument(GitHubRepository repository, String html, int scale) throws Exception {
+        JEditorPane pane = readmePane(html, BODY_WIDTH);
+        int documentHeight = pane.getHeight();
         int bodyTop = firstBodyTop(repository);
         int height = Math.addExact(Math.addExact(bodyTop, documentHeight), 54);
         BufferedImage canvas = new BufferedImage(Math.multiplyExact(WIDTH, scale), Math.multiplyExact(height, scale), BufferedImage.TYPE_INT_RGB);
@@ -224,15 +340,37 @@ public final class GitHubCardRenderer {
         return bytes.toByteArray();
     }
 
+    /** Paint rounded code panels in the output scale, keeping the code itself as text. */
+    private static final class CodeBlockView extends BlockView {
+        CodeBlockView(javax.swing.text.Element element) { super(element, View.Y_AXIS); }
+        @Override public void paint(Graphics graphics, Shape allocation) {
+            Rectangle box = allocation.getBounds();
+            Graphics2D g = (Graphics2D) graphics.create();
+            try {
+                int x = box.x + getLeftInset() - CODE_PAD_X, y = box.y + getTopInset() - CODE_PAD_TOP;
+                int width = box.width - getLeftInset() - getRightInset() + CODE_PAD_X * 2;
+                int height = box.height - getTopInset() - getBottomInset() + CODE_PAD_TOP + CODE_PAD_BOTTOM;
+                g.setColor(new Color(0x252523)); g.fillRoundRect(x, y, width, height, 12, 12);
+                g.setColor(new Color(0x3c3b36)); g.setStroke(new BasicStroke(1));
+                g.drawRoundRect(x, y, width - 1, height - 1, 12, 12);
+                Object language = getElement().getAttributes().getAttribute(HTML.Attribute.TITLE);
+                g.setFont(font(10)); g.setColor(MUTED);
+                g.clipRect(x + CODE_PAD_X, y, Math.max(1, width - CODE_PAD_X * 2), CODE_PAD_TOP);
+                g.drawString(language == null ? "文本" : language.toString(), x + CODE_PAD_X, y + 15);
+            } finally { g.dispose(); }
+            super.paint(graphics, allocation);
+        }
+    }
+
     private static int titleHeight(GitHubRepository repository) {
         BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = image.createGraphics(); g.setFont(font(36));
+        Graphics2D g = image.createGraphics(); g.setFont(boldFont(36));
         List<String> lines = wrap(g.getFontMetrics(), repository.name, WIDTH - 64);
         boolean inline = inlineBadges(g, repository, lines.get(lines.size() - 1)); g.dispose();
         return 36 + lines.size() * 44 + (hasBadges(repository) && !inline ? 30 : 0);
     }
     private static boolean inlineBadges(Graphics2D g, GitHubRepository repo, String lastLine) {
-        int titleWidth = font(36).getStringBounds(lastLine, g.getFontRenderContext()).getBounds().width;
+        int titleWidth = boldFont(36).getStringBounds(lastLine, g.getFontRenderContext()).getBounds().width;
         int badgeWidth = 0;
         for (String label : List.of(repo.archived ? "Archived" : "", repo.stars > 1000 ? "HOT" : "", isNew(repo) ? "NEW" : ""))
             if (!label.isEmpty()) badgeWidth += font(12).getStringBounds(label, g.getFontRenderContext()).getBounds().width + 25;
@@ -246,7 +384,16 @@ public final class GitHubCardRenderer {
     }
     private static int firstBodyTop(GitHubRepository repository) {
         int overflowRows = (Math.max(0, repository.contributors.size() - 7) + 11) / 12;
-        return titleHeight(repository) + 124 + overflowRows * 45 + (repository.archived ? 44 : 0) + 44;
+        int ownerOverflow = (ownerLines(repository).size() - 1) * 26;
+        return titleHeight(repository) + 124 + overflowRows * 45 + ownerOverflow + (repository.archived ? 44 : 0) + 44;
+    }
+    private static List<String> ownerLines(GitHubRepository repository) {
+        int avatars = Math.min(7, repository.contributors.size());
+        int width = WIDTH - 72 - (avatars == 0 ? 0 : avatars * 38 + (avatars - 1) * 7 + 16);
+        BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        try { g.setFont(font(20)); return wrap(g.getFontMetrics(), repository.ownerName, width); }
+        finally { g.dispose(); }
     }
     static List<Integer> contributorRows(int count) {
         List<Integer> rows = new ArrayList<>();
@@ -255,9 +402,9 @@ public final class GitHubCardRenderer {
         return rows;
     }
     private static void drawHeader(Graphics2D g, GitHubRepository repo) {
-        g.setFont(font(36)); int y = 54;
+        g.setFont(boldFont(36)); g.setColor(FG); int y = 54;
         List<String> titleLines = wrap(g.getFontMetrics(), repo.name, WIDTH - 64);
-        for (String line : titleLines) { text(g, line, 36, FG, 30, y); y += 44; }
+        for (String line : titleLines) { g.drawString(line, 30, y); y += 44; }
         String last = titleLines.get(titleLines.size() - 1);
         boolean inline = inlineBadges(g, repo, last);
         int tagX = inline ? 46 + g.getFontMetrics().stringWidth(last) : 30, tagY = inline ? y - 62 : y - 20;
@@ -280,10 +427,12 @@ public final class GitHubCardRenderer {
         text(g, hash, 14, MUTED, right - hashWidth, top + 27); commit(g, right - hashWidth - 23, top + 15);
         int ownerTop = top + 55;
         text(g, "所有者 | 贡献者", 12, MUTED, 36, ownerTop + 8);
-        text(g, repo.owner, 20, FG, 36, ownerTop + 34);
+        int ownerY = ownerTop + 34;
+        List<String> ownerNameLines = ownerLines(repo);
+        for (String line : ownerNameLines) { text(g, line, 20, FG, 36, ownerY); ownerY += 26; }
         int index = 0, row = 0;
         for (int size : contributorRows(repo.contributors.size())) {
-            int rowY = ownerTop - 3 + row * 45;
+            int rowY = ownerTop - 3 + row * 45 + (row == 0 ? 0 : (ownerNameLines.size() - 1) * 26);
             int x = WIDTH - 36 - (size * 38 + (size - 1) * 7);
             for (int i = 0; i < size; i++) { avatar(g, repo.contributors.get(index++), x, rowY); x += 45; }
             row++;
