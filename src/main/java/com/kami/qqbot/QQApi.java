@@ -98,6 +98,27 @@ public class QQApi {
         post(messagesPath, body);
     }
 
+    /** 引用原消息发送提醒；发送失败时不降级为普通文本。 */
+    public void sendQuotedText(String messagesPath, String content, String msgId,
+                               String referenceId, int msgSeq) throws Exception {
+        post(messagesPath, quotedTextBody(content, msgId, referenceId, msgSeq));
+    }
+
+    static JsonObject quotedTextBody(String content, String msgId, String referenceId, int msgSeq) {
+        if (msgId == null || msgId.isBlank() || referenceId == null || referenceId.isBlank()) {
+            throw new IllegalArgumentException("引用回复需要原消息 ID 和引用 ID");
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("content", content);
+        body.addProperty("msg_type", 0);
+        body.addProperty("msg_id", msgId);
+        body.addProperty("msg_seq", msgSeq);
+        JsonObject reference = new JsonObject();
+        reference.addProperty("message_id", referenceId);
+        body.add("message_reference", reference);
+        return body;
+    }
+
     /**
      * 上传富媒体并返回 file_info。
      * fileType: 1=图片 2=视频 3=语音 4=文件。

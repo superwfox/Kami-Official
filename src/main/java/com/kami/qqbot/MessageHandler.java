@@ -48,8 +48,8 @@ public class MessageHandler implements AutoCloseable {
         this.api = api;
         this.config = config;
         this.ttdm = new TTDMApi(config);
-        ImageProvenanceHandler.WarningSender sender = (messagesPath, msgId, text) ->
-                api.sendText(messagesPath, text, msgId, seqGen.getAndIncrement());
+        ImageProvenanceHandler.WarningSender sender = (messagesPath, msgId, referenceId, text) ->
+                api.sendQuotedText(messagesPath, text, msgId, referenceId, seqGen.getAndIncrement());
         this.imageProvenance = detector == null ? ImageProvenanceHandler.create(config, sender)
                 : new ImageProvenanceHandler(detector, sender);
         CardRenderer.loadFont(config.assetDir);

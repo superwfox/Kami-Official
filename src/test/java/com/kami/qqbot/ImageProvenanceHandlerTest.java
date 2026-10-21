@@ -75,7 +75,7 @@ class ImageProvenanceHandlerTest {
             started.countDown();
             assertTrue(release.await(3, TimeUnit.SECONDS));
             return true;
-        }, (path, id, text) -> {
+        }, (path, id, referenceId, text) -> {
             replies.add(path + "|" + id + "|" + text);
             replied.countDown();
         })) {
@@ -87,7 +87,7 @@ class ImageProvenanceHandlerTest {
             release.countDown();
             assertTrue(replied.await(3, TimeUnit.SECONDS));
             assertEquals(1, checks.get());
-            assertEquals(List.of("/v2/groups/group/messages|original|图片由OpenAI生成，请注意识别⚠️"), replies);
+            assertEquals(List.of("/v2/groups/group/messages|original|图片由AI生成，请注意识别⚠️"), replies);
         } finally {
             release.countDown();
         }
@@ -101,7 +101,7 @@ class ImageProvenanceHandlerTest {
             checks.incrementAndGet();
             if (url.equals("bad")) throw new IOException("temporary failure");
             return true;
-        }, (path, id, text) -> replied.countDown())) {
+        }, (path, id, referenceId, text) -> replied.countDown())) {
             handler.onMessage(message("id", "bad", "good"), "/v2/users/user/messages");
             assertTrue(replied.await(3, TimeUnit.SECONDS));
             assertEquals(2, checks.get());
@@ -116,8 +116,8 @@ class ImageProvenanceHandlerTest {
             checks.incrementAndGet();
             if (url.equals("error")) throw new IOException();
             return false;
-        }, (path, id, text) -> replies.incrementAndGet())) {
-            handler.check(List.of("negative", "error"), "/v2/users/user/messages", "id", System.currentTimeMillis());
+        }, (path, id, referenceId, text) -> replies.incrementAndGet())) {
+            handler.check(List.of("negative", "error"), "/v2/users/user/messages", "id", "id", System.currentTimeMillis());
             assertEquals(2, checks.get());
             assertEquals(0, replies.get());
         }
@@ -130,8 +130,8 @@ class ImageProvenanceHandlerTest {
         try (ImageProvenanceHandler handler = new ImageProvenanceHandler(url -> {
             checks.incrementAndGet();
             return true;
-        }, (path, id, text) -> replies.incrementAndGet())) {
-            handler.check(List.of("a"), "/v2/groups/group/messages", "id", 0);
+        }, (path, id, referenceId, text) -> replies.incrementAndGet())) {
+            handler.check(List.of("a"), "/v2/groups/group/messages", "id", "id", 0);
             assertEquals(0, checks.get());
             assertEquals(0, replies.get());
         }
@@ -142,7 +142,7 @@ class ImageProvenanceHandlerTest {
         Config config = new Config();
         AtomicInteger replies = new AtomicInteger();
         try (ImageProvenanceHandler handler = ImageProvenanceHandler.create(config,
-                (path, id, text) -> replies.incrementAndGet())) {
+                (path, id, referenceId, text) -> replies.incrementAndGet())) {
             handler.onMessage(message("id", "a"), "/v2/groups/group/messages");
             assertEquals(0, replies.get());
         }
