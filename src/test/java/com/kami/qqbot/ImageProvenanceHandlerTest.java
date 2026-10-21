@@ -23,8 +23,44 @@ class ImageProvenanceHandlerTest {
                 + "{\"url\":\"c\",\"content_type\":\"image/webp; charset=binary\"},"
                 + "{\"url\":\"d\",\"content_type\":\"image/gif\"},"
                 + "{\"url\":\"e\",\"content_type\":\"application/pdf\",\"filename\":\"x.png\"}]}");
-        assertEquals(List.of("a", "b", "c"), ImageProvenanceHandler.imageUrls(message));
+        // image/gif 也是图片候选，下载后由字节嗅探决定是否支持上传。
+        assertEquals(List.of("a", "b", "c", "d"), ImageProvenanceHandler.imageUrls(message));
         assertTrue(ImageProvenanceHandler.imageUrls(json("{\"attachments\":null}")).isEmpty());
+    }
+
+    @Test
+    void acceptsGenericImageTypesAndSniffsUnknownMediaInsteadOfDroppingIt() {
+        JsonObject message = json("{\"attachments\":["
+                + "{\"url\":\"https://gchat.qpic.cn/a\",\"content_type\":\"image\"},"
+                + "{\"url\":\"https://gchat.qpic.cn/b\",\"content_type\":\"image/jpg\"},"
+                + "{\"url\":\"https://gchat.qpic.cn/c.png?signature=secret\"},"
+                + "{\"url\":\"https://multimedia.nt.qq.com.cn/download?file=opaque\",\"content_type\":\"file\"},"
+                + "{\"url\":\"https://gchat.qpic.cn/document.pdf\",\"content_type\":\"file\"},"
+                + "{\"url\":\"https://gchat.qpic.cn/video\",\"content_type\":\"video/mp4\"}]}");
+        assertEquals(List.of("https://gchat.qpic.cn/a", "https://gchat.qpic.cn/b",
+                        "https://gchat.qpic.cn/c.png?signature=secret", "https://multimedia.nt.qq.com.cn/download?file=opaque"),
+                ImageProvenanceHandler.imageUrls(message));
+    }
+
+    @Test
+    void acceptsSingleAttachmentObjectAndDiagnosticsDoNotExposeUrlsOrFilenames() {
+        JsonObject message = json("{\"attachments\":{\"url\":\"https://gchat.qpic.cn/image?token=secret\","
+                + "\"content_type\":\"image\",\"filename\":\"private-file.png\"}}");
+        assertEquals(1, ImageProvenanceHandler.imageUrls(message).size());
+        String summary = ImageProvenanceHandler.attachmentSummary(message);
+        assertEquals("attachments=1 types=[image] urls=1", summary);
+        assertFalse(summary.contains("secret"));
+        assertFalse(summary.contains("private-file"));
+        assertFalse(ImageProvenanceHandler.attachmentSummary(json("{\"attachments\":{\"content_type\":\"image\\n🔐\"}}"))
+                .contains("\n"));
+    }
+
+    @Test
+    void onlyControlledErrorsCanExposeReasonsInLogs() {
+        assertEquals("下载图片失败，HTTP 403", ImageProvenanceHandler.failureReason(
+                new ImageProvenanceApi.CheckFailure("下载图片失败，HTTP 403")));
+        assertEquals("IllegalArgumentException", ImageProvenanceHandler.failureReason(
+                new IllegalArgumentException("bad secret key or signed URL")));
     }
 
     @Test

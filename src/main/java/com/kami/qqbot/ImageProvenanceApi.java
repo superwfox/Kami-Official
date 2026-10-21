@@ -54,9 +54,15 @@ final class ImageProvenanceApi {
 
     boolean isOpenAIImage(String url) throws IOException, InterruptedException {
         checkAvailable();
-        byte[] image = download(qqImageUri(url));
+        URI uri = qqImageUri(url);
+        System.out.println("[AI Image] 开始下载原图，host=" + uri.getHost());
+        byte[] image = download(uri);
         String mime = imageMime(image);
-        if (mime == null) return false; // GIF 等不支持的格式保留原样跳过。
+        if (mime == null) {
+            System.out.println("[AI Image] 原图下载完成，bytes=" + image.length + "；不是受支持的 PNG/JPEG/WebP，跳过上传");
+            return false;
+        }
+        System.out.println("[AI Image] 原图下载完成，bytes=" + image.length + " mime=" + mime);
         return verify(image, mime);
     }
 
@@ -70,18 +76,18 @@ final class ImageProvenanceApi {
             int status = response.statusCode();
             if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
                 String location = response.headers().firstValue("Location")
-                        .orElseThrow(() -> new IOException("图片重定向缺少 Location"));
+                        .orElseThrow(() -> new CheckFailure("图片重定向缺少 Location"));
                 try {
                     uri = uri.resolve(location);
                 } catch (IllegalArgumentException e) {
-                    throw new IOException("图片重定向地址无效");
+                    throw new CheckFailure("图片重定向地址无效");
                 }
                 continue;
             }
-            if (status != 200) throw new IOException("下载图片失败，HTTP " + status);
+            if (status != 200) throw new CheckFailure("下载图片失败，HTTP " + status);
             return response.body();
         }
-        throw new IOException("图片重定向次数过多");
+        throw new CheckFailure("图片重定向次数过多");
     }
 
     static URI qqImageUri(String raw) throws IOException {
@@ -100,13 +106,13 @@ final class ImageProvenanceApi {
             }
             return uri;
         } catch (IllegalArgumentException e) {
-            throw new IOException("图片地址不是受支持的 QQ HTTPS 附件 CDN");
+            throw new CheckFailure("图片地址不是受支持的 QQ HTTPS 附件 CDN");
         }
     }
 
     boolean verify(byte[] image, String mime) throws IOException, InterruptedException {
         if (image.length == 0 || image.length > MAX_IMAGE_BYTES || mime == null || !mime.equals(imageMime(image))) {
-            throw new IOException("图片为空、过大或格式不受支持");
+            throw new CheckFailure("图片为空、过大或格式不受支持");
         }
         String hash;
         try {
@@ -117,6 +123,7 @@ final class ImageProvenanceApi {
         synchronized (cache) {
             CacheEntry entry = cache.get(hash);
             if (entry != null && System.currentTimeMillis() - entry.createdAt < CACHE_TTL_MS) {
+                System.out.println("[AI Image] 命中图片缓存，detected=" + entry.detected);
                 return entry.detected;
             }
         }
@@ -131,6 +138,7 @@ final class ImageProvenanceApi {
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArrays(List.of(prefix, image, suffix)))
                 .build();
+        System.out.println("[AI Image] 开始调用 OpenAI Content Provenance API");
         HttpResponse<byte[]> response = send(request, 1024 * 1024, 20);
         if (response.statusCode() == 429) {
             long seconds = 60;
@@ -147,9 +155,10 @@ final class ImageProvenanceApi {
         if (response.statusCode() != 200) {
             System.err.println("[AI Image] OpenAI 检测返回 HTTP " + response.statusCode());
             // 错误响应可能包含上传信息，不把响应体或带签名的图片 URL 写进日志。
-            throw new IOException("OpenAI 来源检测失败，HTTP " + response.statusCode());
+            throw new CheckFailure("OpenAI 来源检测失败，HTTP " + response.statusCode());
         }
         boolean detected = hasOpenAISignal(new String(response.body(), StandardCharsets.UTF_8));
+        System.out.println("[AI Image] OpenAI 检测完成，detected=" + detected);
         synchronized (cache) {
             cache.put(hash, new CacheEntry(detected));
             while (cache.size() > 256) cache.remove(cache.keySet().iterator().next());
@@ -158,8 +167,8 @@ final class ImageProvenanceApi {
     }
 
     private void checkAvailable() throws IOException {
-        if (unauthorized) throw new IOException("OpenAI Key 或组织无接口权限，已暂停检测，检查权限后重启");
-        if (System.currentTimeMillis() < retryAfter) throw new IOException("OpenAI 检测限流冷却中");
+        if (unauthorized) throw new CheckFailure("OpenAI Key 或组织无接口权限，已暂停检测，检查权限后重启");
+        if (System.currentTimeMillis() < retryAfter) throw new CheckFailure("OpenAI 检测限流冷却中");
     }
 
     static boolean hasOpenAISignal(String body) throws IOException {
@@ -185,7 +194,7 @@ final class ImageProvenanceApi {
             }
             return false;
         } catch (RuntimeException e) {
-            throw new IOException("OpenAI 来源检测返回格式异常");
+            throw new CheckFailure("OpenAI 来源检测返回格式异常");
         }
     }
 
@@ -217,13 +226,20 @@ final class ImageProvenanceApi {
             return pending.get(seconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             pending.cancel(true);
-            throw new IOException("图片验证 HTTP 请求超时");
+            throw new CheckFailure("图片验证 HTTP 请求超时");
         } catch (InterruptedException e) {
             pending.cancel(true);
             throw e;
         } catch (ExecutionException e) {
-            throw new IOException("图片验证 HTTP 请求失败");
+            if (e.getCause() instanceof CheckFailure) throw (CheckFailure) e.getCause();
+            String kind = e.getCause() == null ? "unknown" : e.getCause().getClass().getSimpleName();
+            throw new CheckFailure("图片验证 HTTP 请求失败（" + kind + "）");
         }
+    }
+
+    /** 只含受控错误信息，允许写入日志；原始网络异常不输出其 URL 或请求头。 */
+    static final class CheckFailure extends IOException {
+        CheckFailure(String message) { super(message); }
     }
 
     private static final class CacheEntry {
@@ -248,7 +264,7 @@ final class ImageProvenanceApi {
             for (ByteBuffer buffer : buffers) {
                 if (buffer.remaining() > limit - bytes.size()) {
                     subscription.cancel();
-                    result.completeExceptionally(new IOException("响应超过大小限制"));
+                    result.completeExceptionally(new CheckFailure("响应超过大小限制"));
                     return;
                 }
                 byte[] chunk = new byte[buffer.remaining()];
