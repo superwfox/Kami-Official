@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   含 https://space.bilibili.com/ -> 头像、昵称、粉丝、投稿视频数和最新动态链接
  * 群消息会 @ 发送者（单聊不 @）。
  */
-public class MessageHandler {
+public class MessageHandler implements AutoCloseable {
 
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -40,12 +40,18 @@ public class MessageHandler {
     private final ImageProvenanceHandler imageProvenance;
 
     public MessageHandler(QQApi api, Config config) {
+        this(api, config, null);
+    }
+
+    /** 测试注入来源检测器，验证真实消息分发路径而不调用外部服务。 */
+    MessageHandler(QQApi api, Config config, ImageProvenanceHandler.Detector detector) {
         this.api = api;
         this.config = config;
         this.ttdm = new TTDMApi(config);
-        this.imageProvenance = ImageProvenanceHandler.create(config,
-                (messagesPath, msgId, text) ->
-                        api.sendText(messagesPath, text, msgId, seqGen.getAndIncrement()));
+        ImageProvenanceHandler.WarningSender sender = (messagesPath, msgId, text) ->
+                api.sendText(messagesPath, text, msgId, seqGen.getAndIncrement());
+        this.imageProvenance = detector == null ? ImageProvenanceHandler.create(config, sender)
+                : new ImageProvenanceHandler(detector, sender);
         CardRenderer.loadFont(config.assetDir);
     }
 
@@ -55,6 +61,9 @@ public class MessageHandler {
      * 二者指令一致，差异仅在消息/文件接口路径与是否 @ 发送者。
      */
     public void onEvent(String type, JsonObject d) {
+        if (type.endsWith("MESSAGE_CREATE")) {
+            System.out.println("[MSG] event=" + type + " " + ImageProvenanceHandler.attachmentSummary(d));
+        }
         try {
             switch (type) {
                 case "GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE": {
@@ -78,6 +87,10 @@ public class MessageHandler {
             System.err.println("[MSG] 处理事件失败: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    public void close() {
+        imageProvenance.close();
     }
 
     /** 群事件里取发送者 member_openid（用于 @）；缺失返回 null。 */
