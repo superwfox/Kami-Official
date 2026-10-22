@@ -17,7 +17,10 @@ class GitHubCardMessageTest {
             "C2C_MESSAGE_CREATE, https://github.com/superwfox/Kami-Official, superwfox/Kami-Official",
             "GROUP_AT_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox",
             "GROUP_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox",
-            "C2C_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox"
+            "C2C_MESSAGE_CREATE, https://github.com/superwfox, superwfox/superwfox",
+            "GROUP_AT_MESSAGE_CREATE, https://github.com/R2Ion/Ion\u2060\uFFFC, R2Ion/Ion",
+            "GROUP_MESSAGE_CREATE, https://github.com/R2Ion/Ion\u2060\uFFFC, R2Ion/Ion",
+            "C2C_MESSAGE_CREATE, https://github.com/R2Ion/Ion\u2060\uFFFC, R2Ion/Ion"
     })
     void realDispatcherSendsExactlyOneFullImageWithoutDuplicateDelivery(String event, String link, String expectedRepository) throws Exception {
         Config config = new Config(); config.assetDir="public"; config.aiImageCheckEnabled=false;

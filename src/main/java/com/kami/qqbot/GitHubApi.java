@@ -13,8 +13,9 @@ import java.util.regex.*;
 
 /** Public GitHub metadata only. Optional fields never turn an unknown CI result into success. */
 public final class GitHubApi {
-    private static final Pattern LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})(?=$|[/\\s\\p{Z}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
-    private static final Pattern PROFILE_LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/?(?=$|[\\s\\p{Z}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
+    // QQ may append invisible format characters and U+FFFC to copied links.
+    private static final Pattern LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})(?=$|[/\\s\\p{Z}\\p{Cf}\\x{FFFC}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PROFILE_LINK = Pattern.compile("https://(?:www\\.)?github\\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/?(?=$|[\\s\\p{Z}\\p{Cf}\\x{FFFC}?#<>)\\]，。；,:!])", Pattern.CASE_INSENSITIVE);
     private static final Set<String> SITE_ROUTES = Set.of("about", "apps", "business", "codespaces", "collections", "contact",
             "customer-stories", "dashboard", "enterprise", "events", "explore", "features", "issues", "join", "login", "logout",
             "marketplace", "new", "notifications", "organizations", "orgs", "pricing", "pulls", "readme", "search", "security",
