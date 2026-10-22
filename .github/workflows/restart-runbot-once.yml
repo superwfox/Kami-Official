@@ -1,0 +1,19 @@
+name: Stop previous Run Bot once
+on:
+  push:
+    branches:
+      - codex/restart-runbot-20261022
+    paths:
+      - .github/workflows/restart-runbot-once.yml
+permissions:
+  contents: read
+jobs:
+  stop_previous:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stop old instance
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
+          GH_REPO: superwfox/Kami-Official
+        run: gh run cancel 39697320277
