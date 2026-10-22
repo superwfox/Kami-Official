@@ -27,6 +27,7 @@ final class ImageProvenanceHandler implements AutoCloseable {
 
     interface Detector {
         boolean isOpenAIImage(String url) throws Exception;
+        default boolean isOpenAIImage(String url, ImageCheckTrace trace) throws Exception { return isOpenAIImage(url); }
     }
 
     interface WarningSender {
@@ -39,8 +40,13 @@ final class ImageProvenanceHandler implements AutoCloseable {
             return new ImageProvenanceHandler(null, sender);
         }
         ImageProvenanceApi api = new ImageProvenanceApi(config.openaiApiKey.trim());
-        System.out.println("[AI Image] OpenAI 图片来源检测已启用");
-        return new ImageProvenanceHandler(api::isOpenAIImage, sender);
+        System.out.println("[AI Image] OpenAI 图片来源检测已启用 connect_timeout_s=5 download_budget_s=15 openai_budget_s=20 workers=2 queue_capacity=8 progress_interval_s=5");
+        return new ImageProvenanceHandler(new Detector() {
+            public boolean isOpenAIImage(String url) throws Exception { return api.isOpenAIImage(url); }
+            public boolean isOpenAIImage(String url, ImageCheckTrace trace) throws Exception {
+                return api.isOpenAIImage(url, trace);
+            }
+        }, sender);
     }
 
     ImageProvenanceHandler(Detector detector, WarningSender sender) {
@@ -62,14 +68,15 @@ final class ImageProvenanceHandler implements AutoCloseable {
             System.err.println("[AI Image] 收到附件但缺少消息 ID，无法回复");
             return;
         }
+        ImageCheckTrace trace = new ImageCheckTrace();
         List<String> images = imageUrls(message);
-        System.out.println("[AI Image] " + attachmentSummary(message) + " imageCandidates=" + images.size());
+        trace.log("received", attachmentSummary(message) + " imageCandidates=" + images.size());
         if (workers == null) {
-            System.out.println("[AI Image] 跳过附件：检测未启用，请检查 OPENAI_API_KEY / aiImageCheckEnabled");
+            trace.log("skip", "检测未启用，请检查 OPENAI_API_KEY / aiImageCheckEnabled");
             return;
         }
         if (images.isEmpty()) {
-            System.out.println("[AI Image] 跳过附件：没有可下载的图片候选");
+            trace.log("skip", "没有可下载的图片候选");
             return;
         }
         long receivedAt = System.currentTimeMillis();
@@ -77,48 +84,78 @@ final class ImageProvenanceHandler implements AutoCloseable {
         synchronized (seen) {
             seen.entrySet().removeIf(entry -> receivedAt - entry.getValue() > Duration.ofMinutes(5).toMillis());
             if (seen.containsKey(key) || seen.size() >= 1024) {
-                System.out.println("[AI Image] 跳过重复消息或已达消息去重上限");
+                trace.log("skip", "重复消息或已达消息去重上限");
                 return;
             }
             seen.put(key, receivedAt);
         }
         try {
             String referenceId = referenceId(message);
-            workers.execute(() -> check(images, messagesPath, msgId, referenceId, receivedAt));
-            System.out.println("[AI Image] 已提交后台检测，images=" + images.size());
+            trace.log("queue", "提交后台检测 images=" + images.size() + " active_workers=" + workers.getActiveCount()
+                    + " queued=" + workers.getQueue().size() + " queue_capacity=8 workers=2");
+            workers.execute(() -> check(images, messagesPath, msgId, referenceId, receivedAt, trace));
         } catch (RejectedExecutionException e) {
-            System.err.println("[AI Image] 检测队列已满，跳过本条图片消息");
+            trace.log("rejected", "检测队列已满或已关闭，跳过本条消息 active_workers=" + workers.getActiveCount()
+                    + " queued=" + workers.getQueue().size());
         }
     }
 
     void check(List<String> images, String messagesPath, String msgId, String referenceId, long receivedAt) {
-        for (String url : images) {
-            if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() - receivedAt > MAX_AGE_MS) {
-                System.out.println("[AI Image] 跳过过期或已中断的图片任务");
-                return;
-            }
-            boolean detected;
-            try {
-                detected = detector.isOpenAIImage(url);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (Exception e) {
-                System.err.println("[AI Image] 检测未完成，跳过本图：" + failureReason(e));
-                continue;
-            }
-            if (detected) {
-                try {
-                    sender.send(messagesPath, msgId, referenceId, WARNING);
-                    System.out.println("[AI Image] 检测到 OpenAI 来源，已回复原消息");
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    System.err.println("[AI Image] 检测提醒发送失败（" + e.getClass().getSimpleName() + "）");
+        check(images, messagesPath, msgId, referenceId, receivedAt, new ImageCheckTrace());
+    }
+
+    private void check(List<String> images, String messagesPath, String msgId, String referenceId,
+                       long receivedAt, ImageCheckTrace trace) {
+        int checked = 0, failed = 0;
+        String outcome = "no_supported_signal";
+        trace.log("worker", "开始处理 queue_wait_ms=" + trace.elapsedMs() + " images=" + images.size()
+                + " age_ms=" + Math.max(0, System.currentTimeMillis() - receivedAt));
+        try {
+            for (int index = 0; index < images.size(); index++) {
+                if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() - receivedAt > MAX_AGE_MS) {
+                    outcome = "expired_or_interrupted";
+                    trace.log("skip", "任务已过期或被中断 image=" + (index + 1) + "/" + images.size());
+                    return;
                 }
-                return;
+                trace.log("image", "开始处理 image=" + (index + 1) + "/" + images.size());
+                boolean detected;
+                try {
+                    detected = detector.isOpenAIImage(images.get(index), trace);
+                    checked++;
+                } catch (InterruptedException e) {
+                    outcome = "interrupted";
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (Exception e) {
+                    failed++;
+                    trace.log("image_failed", "检测未完成 image=" + (index + 1) + "/" + images.size()
+                            + " reason=" + failureReason(e) + "；跳过本图，不把失败视为未检出");
+                    continue;
+                }
+                if (detected) {
+                    outcome = "detected_reply_pending";
+                    trace.log("reply", "已确认来源信号，开始引用原消息回复");
+                    long replyStarted = System.nanoTime();
+                    try {
+                        sender.send(messagesPath, msgId, referenceId, WARNING);
+                        outcome = "detected_reply_sent";
+                        trace.log("reply", "引用回复完成 reply_elapsed_ms="
+                                + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - replyStarted));
+                    } catch (InterruptedException e) {
+                        outcome = "reply_interrupted";
+                        Thread.currentThread().interrupt();
+                    } catch (Exception e) {
+                        outcome = "reply_failed";
+                        trace.log("reply_failed", "causes=" + ImageCheckTrace.causes(e));
+                    }
+                    return;
+                }
+                trace.log("image_result", "本图未检出受支持的来源信号，不发送提醒");
             }
-            System.out.println("[AI Image] 本图未检出受支持的 OpenAI 来源信号，不发送提醒");
+            if (failed > 0) outcome = checked == 0 ? "all_checks_failed" : "partial_checks_failed";
+        } finally {
+            trace.log("finished", "outcome=" + outcome + " checked=" + checked + " failed=" + failed
+                    + " total_images=" + images.size());
         }
     }
 
