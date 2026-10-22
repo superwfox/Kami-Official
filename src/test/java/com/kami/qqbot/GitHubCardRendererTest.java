@@ -32,6 +32,38 @@ class GitHubCardRendererTest {
         assertFalse(html.contains("<script")); assertFalse(html.contains("file:/")); assertTrue(html.contains("最后的正文"));
         assertTrue(org.jsoup.Jsoup.parse(html).selectFirst("pre").wholeText().replace("\n", "").contains(code));
     }
+    @Test void centeredReadmeTitleAndSeparateNavigationLinksArePreserved() throws Exception {
+        String source = "<h1 align=\"center\">Ion</h1>\n<p align=\"center\"><strong>"
+                + "<a href=\"https://github.com/r2ion/Ion/releases/latest\">Download</a> | "
+                + "<a href=\"https://thunderstore.io/\">Thunderstore</a> | "
+                + "<a href=\"https://discord.gg/example\">Discord</a></strong></p>";
+        var html = Jsoup.parse(new GitHubCardRenderer(null).documentHtml(GitHubApiTest.fixture(source), directory));
+        assertEquals("center",html.selectFirst("h1").attr("align"));
+        assertEquals("center",html.selectFirst("p").attr("align"));
+        assertEquals("Download | Thunderstore | Discord",html.selectFirst("p").text());
+    }
+
+    @Test void adjacentAttachmentImagesWrapInsteadOfWideningAndCroppingTheEntireReadme() throws Exception {
+        String source = "# Centered title\n\n![banner](banner.png)\n<img src=\"small.webp\" align=\"left\">\n\n"
+                + "This paragraph must wrap inside the card. ".repeat(20);
+        GitHubCardRenderer renderer = new GitHubCardRenderer(null,url -> {
+            int width=url.endsWith("banner.png")?720:320;
+            BufferedImage image=new BufferedImage(width,100,BufferedImage.TYPE_INT_RGB);
+            var g=image.createGraphics();g.setColor(new Color(width==720?0xff1122:0x1122ff));g.fillRect(0,0,width,100);g.dispose();
+            return image;
+        });
+        var html=Jsoup.parse(renderer.documentHtml(GitHubApiTest.fixture(source),directory));
+        assertEquals(1,html.select("p > br").size());
+        BufferedImage output=ImageIO.read(new ByteArrayInputStream(renderer.render(GitHubApiTest.fixture(source),1)));
+        int redBottom=-1,blueTop=output.getHeight(),bluePixels=0;
+        for(int y=0;y<output.getHeight();y++)for(int x=0;x<output.getWidth();x++) {
+            int color=output.getRGB(x,y)&0xffffff;
+            if(color==0xff1122)redBottom=Math.max(redBottom,y);
+            if(color==0x1122ff){blueTop=Math.min(blueTop,y);bluePixels++;assertTrue(x>=48 && x<672);}
+        }
+        assertTrue(blueTop>redBottom);assertEquals(32000,bluePixels);
+    }
+
     @Test void contributorRowsUseSevenThenTwelveAndNeverDropTheRemainder() {
         assertEquals(List.of(),GitHubCardRenderer.contributorRows(0));
         assertEquals(List.of(3),GitHubCardRenderer.contributorRows(3));

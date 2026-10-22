@@ -83,6 +83,8 @@ public final class GitHubCardRenderer {
         Safelist allowed = Safelist.relaxed().addTags("h1", "h2", "h3", "h4", "h5", "h6", "del", "s", "input", "div", "kbd", "sub", "sup")
                 .addAttributes("input", "checked", "type")
                 .addAttributes("code", "class")
+                .addAttributes("h1", "align").addAttributes("h2", "align").addAttributes("h3", "align")
+                .addAttributes("h4", "align").addAttributes("h5", "align").addAttributes("h6", "align")
                 .addAttributes("img", "align").addAttributes("p", "align").addAttributes("div", "align")
                 .addAttributes("br", "clear")
                 .addAttributes("td", "width").addAttributes("th", "width");
@@ -118,6 +120,7 @@ public final class GitHubCardRenderer {
             ImageIO.write(bitmap, "png", file.toFile());
             image.attr("src", file.toUri().toString()).attr("width", Integer.toString(width)).attr("height", Integer.toString(height));
         }
+        wrapImageRows(document);
         for (Element table : document.select("table")) table.attr("width", "100%").attr("cellspacing", "0")
                 .attr("cellpadding", table.hasClass("readme-float") ? "0" : "6");
         // Swing's <pre> does not wrap long lines; insert visual line breaks without removing characters.
@@ -140,6 +143,23 @@ public final class GitHubCardRenderer {
         fitFloats(document);
         document.outputSettings().prettyPrint(false);
         return document.outerHtml();
+    }
+
+    /** Swing treats a row of inline images as unbreakable, which can widen the whole document. */
+    private static void wrapImageRows(Document document) {
+        for (Element container : document.select("p, div")) {
+            if (!container.text().isBlank() || container.children().isEmpty()) continue;
+            if (container.children().stream().anyMatch(child -> !child.is("img, br")
+                    && !(child.normalName().equals("a") && child.childrenSize() == 1 && child.child(0).is("img")))) continue;
+            int available = imageContainerWidth(container), used = 0;
+            for (Element child : new ArrayList<>(container.children())) {
+                if (child.is("br")) { used = 0; continue; }
+                Element image = child.is("img") ? child : child.child(0);
+                int width = length(image.attr("width"), available, available);
+                if (used > 0 && used + 8 + width > available) { child.before(new Element("br")); used = 0; }
+                used += (used == 0 ? 0 : 8) + width;
+            }
+        }
     }
 
     private static void selectDarkPictures(Document document) {
@@ -178,8 +198,8 @@ public final class GitHubCardRenderer {
                 if (clearBreak(next) || next.normalName().equals("hr") || next.is("img[align=right], img[align=left]")) { end = next; break; }
                 content.add(next);
             }
+            if (content.isEmpty()) { image.removeAttr("align"); continue; }
             image.removeAttr("align").attr("width", Integer.toString(imageWidth));
-            if (content.isEmpty()) continue;
             for (Element element : content) for (Element child : element.getAllElements())
                 if (child.normalName().equals("img") && child.attr("width").endsWith("%"))
                     child.attr("width", Integer.toString(length(child.attr("width"), available, textWidth)));
