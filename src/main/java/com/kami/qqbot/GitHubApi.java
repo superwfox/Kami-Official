@@ -209,30 +209,48 @@ public final class GitHubApi {
         } catch (IllegalArgumentException e) { return null; }
     }
 
-    /** GitHub image hosts and badge services; no credentials, arbitrary hosts or redirects. */
+    /** Fetch public images with a small, validated redirect chain and no API credentials. */
     public BufferedImage asset(String url) throws InterruptedException {
         try {
             URI uri = URI.create(url);
-            String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getRawUserInfo() != null || uri.getPort() != -1
-                    || !Set.of("avatars.githubusercontent.com", "raw.githubusercontent.com", "user-images.githubusercontent.com",
-                    "private-user-images.githubusercontent.com", "camo.githubusercontent.com", "github.com", "img.shields.io",
-                    "badgen.net", "flat.badgen.net").contains(host)) return null;
-            HttpRequest request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(8)).header("User-Agent", "Kami-Official-repository-card").GET().build();
-            for (int attempt = 0; attempt < 2; attempt++) {
-                try {
-                    HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
-                    try (InputStream input = response.body()) {
-                        if (response.statusCode() >= 500 && attempt == 0) continue;
-                        if (response.statusCode() != 200) return null;
-                        byte[] bytes = input.readNBytes(10 * 1024 * 1024 + 1);
-                        if (bytes.length > 10 * 1024 * 1024) return null;
-                        return GitHubImageDecoder.decode(bytes);
-                    }
-                } catch (IOException e) { if (attempt == 1) return null; }
+            Set<URI> visited = new HashSet<>();
+            for (int redirects = 0; redirects <= 3; redirects++) {
+                if (!allowedAssetUri(uri) || !visited.add(uri)) return null;
+                HttpRequest request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(8))
+                        .header("User-Agent", "Kami-Official-repository-card").GET().build();
+                URI next = null;
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                        try (InputStream input = response.body()) {
+                            int status = response.statusCode();
+                            if (Set.of(301, 302, 303, 307, 308).contains(status)) {
+                                String location = response.headers().firstValue("Location").orElse("");
+                                if (location.isBlank()) return null;
+                                next = uri.resolve(location);
+                                break;
+                            }
+                            if (status >= 500 && attempt == 0) continue;
+                            if (status != 200) return null;
+                            byte[] bytes = input.readNBytes(10 * 1024 * 1024 + 1);
+                            if (bytes.length > 10 * 1024 * 1024) return null;
+                            return GitHubImageDecoder.decode(bytes);
+                        }
+                    } catch (IOException e) { if (attempt == 1) return null; }
+                }
+                if (next == null) return null;
+                uri = next;
             }
             return null;
         } catch (IllegalArgumentException e) { return null; }
+    }
+
+    private static boolean allowedAssetUri(URI uri) {
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        return "https".equalsIgnoreCase(uri.getScheme()) && uri.getRawUserInfo() == null && uri.getPort() == -1
+                && Set.of("avatars.githubusercontent.com", "raw.githubusercontent.com", "user-images.githubusercontent.com",
+                "private-user-images.githubusercontent.com", "camo.githubusercontent.com", "github.com", "img.shields.io",
+                "badgen.net", "flat.badgen.net", "github-production-user-asset-6210df.s3.amazonaws.com").contains(host);
     }
 
     private JsonElement get(String path) throws IOException, InterruptedException { return get(path, false); }
