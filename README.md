@@ -1,29 +1,6 @@
 # Kami QQ 官方机器人
 
-Java 17 / Maven。使用 `config.yml` 配置 QQ AppID、AppSecret，执行 ### 图片检测详细日志与超时排查
-
-每条附件消息分配随机 `trace`，贯穿队列、逐图检测、HTTP 回调及引用回复；不使用群号、QQ 用户或消息 ID 作为追踪标识。每行包含 UTC 时间 `time`、自任务创建起的 `elapsed_ms` 和 `stage`。并发任务可按同一个 `trace` 筛选。
-
-- `received / queue / worker`：附件及候选数、并发数、队列深度、排队耗时和消息年龄。队列容量 8，工作线程 2。
-- `image / validate / download / format / cache`：当前图片序号、地址验证、下载主机、重定向跳数、原图字节数、魔数识别格式、缓存命中与可用性检查。
-- `openai_prepare / openai_check`：图片及 multipart 字节数、唯一 `client_request_id`、请求体交付进度、响应头、响应体字节数、HTTP 耗时和 20 秒预算。QQ 下载预算仍为 15 秒，连接超时仍为 5 秒。
-- 每等待 5 秒输出当前 HTTP 状态。响应头到达时立即记录 HTTP 状态、HTTP 版本、`x-request-id`、`openai-processing-ms`、`Retry-After` 及剩余请求数（服务器未提供则为 `unavailable`）。
-- `parse / result / cooldown / access`：响应解析、受支持信号摘要、429 冷却时间、访问失败后的暂停状态。仅输出白名单错误类型/代码，不输出原始响应或服务器错误消息。
-- `reply / finished`：开始引用回复、回复耗时、处理成功/失败计数和最终结论。`all_checks_failed` 或 `partial_checks_failed` 不表示图片没有 AI 来源信号。
-
-超时行里的 `phase` 用于定位：
-
-| phase | 客户端实际观察到的状态 |
-| --- | --- |
-| `connecting_or_publishing_body` | 尚未观察到请求体交付完成；可能仍在连接、TLS 或交付请求体，不能仅凭此区分 DNS/TCP/TLS |
-| `waiting_response_headers` | 请求体已交给 HttpClient，尚未收到响应头；**不能据此证明 OpenAI 已收到完整图片** |
-| `receiving_response_body` | 已收到响应头，读取完整响应体时卡住；HTTP 状态和服务端请求 ID 已可见 |
-
-`client_body_bytes` 是客户端 BodyPublisher 交付的字节数，不是对端确认接收的字节数。`response_bytes` 是客户端实际收到的响应体字节数。Java HTTP 客户端本身不提供独立的 DNS/TCP/TLS 分段耗时，本实现不会虚构这些阶段。取消客户端等待也不代表服务端一定停止处理。本轮仅细化日志，不扩大超时时间、不添加自动重试。
-
-OpenAI 侧排查顺序：确认运行所用 Key 的项目和访问权限；若收到 404，检查组织是否具有 Content Provenance 接口访问权；401 检查 Key，403 检查访问限制，429 按限流信息处理，5xx 结合请求 ID 排查服务端问题。纯超时不能单凭日志归因于余额或权限。联系支持时提供 UTC 时间、`client_request_id`，以及可用的 `x-request-id`；不要提供 Key 或带签名的 QQ 图片 URL。官方说明见 [请求诊断](https://developers.openai.com/api/reference/overview#debugging-requests) 和 [Content provenance](https://developers.openai.com/api/docs/guides/content-provenance)。
-
-`mvn clean verify` 后运行：
+Java 17 / Maven。使用 `config.yml` 配置 QQ AppID、AppSecret，执行 `mvn clean verify` 后运行：
 
 ```bash
 java -jar target/kami-qqbot.jar
@@ -62,6 +39,29 @@ Key 不写入仓库或日志。没有 Key 时只禁用这项检测，其它指�
 ### 验证
 
 排查收图问题时，查看日志中的 `event=... attachments=... types=... urls=...` 与 `[AI Image]` 阶段日志：候选图片数 → 后台任务 → 原图下载 → OpenAI API → 检测结果/回复。`content=[]` 只表示没有文本，图片数据位于 `attachments`。如收到附件却无 Key、候选被跳过、下载失败或 API 访问失败，现在会分别记录原因；日志不包含文件名、图片完整 URL、URL 签名或 Key。若完全没有相应的消息事件日志，应先检查 QQ 的事件推送权限。
+
+### 图片检测详细日志与超时排查
+
+每条附件消息分配随机 `trace`，贯穿队列、逐图检测、HTTP 回调及引用回复；不使用群号、QQ 用户或消息 ID 作为追踪标识。每行包含 UTC 时间 `time`、自任务创建起的 `elapsed_ms` 和 `stage`。并发任务可按同一个 `trace` 筛选。
+
+- `received / queue / worker`：附件及候选数、并发数、队列深度、排队耗时和消息年龄。队列容量 8，工作线程 2。
+- `image / validate / download / format / cache`：当前图片序号、地址验证、下载主机、重定向跳数、原图字节数、魔数识别格式、缓存命中与可用性检查。
+- `openai_prepare / openai_check`：图片及 multipart 字节数、唯一 `client_request_id`、请求体交付进度、响应头、响应体字节数、HTTP 耗时和 20 秒预算。QQ 下载预算仍为 15 秒，连接超时仍为 5 秒。
+- 每等待 5 秒输出当前 HTTP 状态。响应头到达时立即记录 HTTP 状态、HTTP 版本、`x-request-id`、`openai-processing-ms`、`Retry-After` 及剩余请求数（服务器未提供则为 `unavailable`）。
+- `parse / result / cooldown / access`：响应解析、受支持信号摘要、429 冷却时间、访问失败后的暂停状态。仅输出白名单错误类型/代码，不输出原始响应或服务器错误消息。
+- `reply / finished`：开始引用回复、回复耗时、处理成功/失败计数和最终结论。`all_checks_failed` 或 `partial_checks_failed` 不表示图片没有 AI 来源信号。
+
+超时行里的 `phase` 用于定位：
+
+| phase | 客户端实际观察到的状态 |
+| --- | --- |
+| `connecting_or_publishing_body` | 尚未观察到请求体交付完成；可能仍在连接、TLS 或交付请求体，不能仅凭此区分 DNS/TCP/TLS |
+| `waiting_response_headers` | 请求体已交给 HttpClient，尚未收到响应头；**不能据此证明 OpenAI 已收到完整图片** |
+| `receiving_response_body` | 已收到响应头，读取完整响应体时卡住；HTTP 状态和服务端请求 ID 已可见 |
+
+`client_body_bytes` 是客户端 BodyPublisher 交付的字节数，不是对端确认接收的字节数。`response_bytes` 是客户端实际收到的响应体字节数。Java HTTP 客户端本身不提供独立的 DNS/TCP/TLS 分段耗时，本实现不会虚构这些阶段。取消客户端等待也不代表服务端一定停止处理。本轮仅细化日志，不扩大超时时间、不添加自动重试。
+
+OpenAI 侧排查顺序：确认运行所用 Key 的项目和访问权限；若收到 404，检查组织是否具有 Content Provenance 接口访问权；401 检查 Key，403 检查访问限制，429 按限流信息处理，5xx 结合请求 ID 排查服务端问题。纯超时不能单凭日志归因于余额或权限。联系支持时提供 UTC 时间、`client_request_id`，以及可用的 `x-request-id`；不要提供 Key 或带签名的 QQ 图片 URL。官方说明见 [请求诊断](https://developers.openai.com/api/reference/overview#debugging-requests) 和 [Content provenance](https://developers.openai.com/api/docs/guides/content-provenance)。
 
 `mvn clean verify` 会运行本地 HTTP 模拟服务测试，检查原图 multipart 上传、来源结果判定、响应大小限制、限流冷却、消息去重和原消息回复。测试不会调用 OpenAI，也不发送真实 QQ 消息；上线前仍需用有效 Key 和 QQ 测试群验证实际权限及回调。
 
