@@ -1,0 +1,24 @@
+name: Restart Run Bot once
+on:
+  push:
+    branches:
+      - codex/restart-runbot-20261022
+    paths:
+      - .github/workflows/restart-runbot-once.yml
+permissions:
+  contents: read
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start Run Bot from master
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
+          GH_REPO: superwfox/Kami-Official
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::WORKFLOW_PAT is missing; cannot start Run Bot"
+            exit 1
+          fi
+          gh workflow run run.yml --ref master -f minutes=300
