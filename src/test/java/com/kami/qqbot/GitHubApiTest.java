@@ -115,6 +115,15 @@ class GitHubApiTest {
             assertNull(GitHubApi.repositoryIn(link));
         assertEquals("superwfox/superwfox", GitHubApi.repositoryIn("https://github.com/features https://github.com/superwfox"));
     }
+    @Test void qqInvisibleLinkSuffixesDoNotPreventRepositoryOrProfileDetection() {
+        String[] suffixes = {"\u2060\uFFFC", "\u2060", "\uFFFC", "\u200B", "\u200C", "\u200D", "\uFEFF"};
+        for (String suffix : suffixes) {
+            assertEquals("R2Ion/Ion", GitHubApi.repositoryIn("https://github.com/R2Ion/Ion" + suffix));
+            assertEquals("superwfox/superwfox", GitHubApi.repositoryIn("https://github.com/superwfox" + suffix));
+        }
+        assertNull(GitHubApi.repositoryIn("https://github.com\u2060.attacker.example/R2Ion/Ion"));
+        assertEquals("R2Ion/Ion", GitHubApi.repositoryIn("https://github.com/R2Ion/Ion\u2060\uFFFC https://github.com/demo/project"));
+    }
     @Test void pendingCancelledAndOldCommitRunsCannotBeShownAsPassed() {
         assertEquals(GitHubRepository.BuildState.NONE, GitHubApi.summarize(List.of(run(1,"Build","in_progress",null,"sha")), "status", "conclusion"));
         assertEquals(GitHubRepository.BuildState.NONE, GitHubApi.summarize(List.of(run(1,"Build","completed","cancelled","sha")), "status", "conclusion"));
