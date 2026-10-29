@@ -8,20 +8,21 @@ permissions:
 jobs:
   restart:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Remove temporary workflow and start latest master
+      - name: Wait for helper cleanup then start latest master
         env:
           GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo '::error::WORKFLOW_PAT is required to restart Run Bot'
-            exit 1
-          fi
-          file_path='.github/workflows/restart-runbot-once.yml'
-          blob_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$file_path?ref=master" --jq '.sha')"
-          gh api --method DELETE "repos/$GITHUB_REPOSITORY/contents/$file_path" \
-            -f message='ops: remove completed one-time Run Bot restart helper' \
-            -f sha="$blob_sha" -f branch=master
-          gh workflow run run.yml --repo "$GITHUB_REPOSITORY" --ref master -f minutes=300
+          test -n "$GH_TOKEN"
+          for attempt in {1..24}; do
+            if ! gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/restart-runbot-once.yml?ref=master" --silent 2>/dev/null; then
+              gh workflow run run.yml --repo "$GITHUB_REPOSITORY" --ref master -f minutes=300
+              exit 0
+            fi
+            sleep 5
+          done
+          echo '::error::Temporary helper cleanup did not complete'
+          exit 1
