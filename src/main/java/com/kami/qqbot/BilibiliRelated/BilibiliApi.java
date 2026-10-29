@@ -28,9 +28,14 @@ import java.util.concurrent.Flow;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** B 站视频短链、主页资料及动态接口客户端，复用 JDK HTTP 与已有 Gson。视频详情使用匿名 buvid 与 WBI 签名，不使用登录 Cookie。 */
+/** B 站视频链接、主页资料及动态接口客户端，复用 JDK HTTP 与已有 Gson。视频详情使用匿名 buvid 与 WBI 签名，不使用登录 Cookie。 */
 public final class BilibiliApi {
-    private static final Pattern SHORT_LINK = Pattern.compile("https://b23\\.tv/([A-Za-z0-9]{1,64})(?![A-Za-z0-9])");
+    // 在消息中只提取受支持的视频地址；不吞入中文标点、QQ 隐形字符或 Markdown 闭合符。
+    private static final Pattern VIDEO_LINK = Pattern.compile(
+            "https://(?:b23\\.tv/[A-Za-z0-9]{1,64}"
+                    + "|(?:www\\.|m\\.)?bilibili\\.com/video/(?:BV[A-Za-z0-9]{10}|av[1-9][0-9]{0,18}))"
+                    + "(?=$|[/\\s\\p{Z}\\p{Cf}\\x{FFFC}?#<>)\\]，。；,:!])"
+                    + "/?(?:\\?[A-Za-z0-9%_~&=+.-]*)?");
     private static final Pattern PROFILE_LINK = Pattern.compile("https://space\\.bilibili\\.com/([1-9][0-9]{0,18})(?![0-9])");
     private static final Pattern DYNAMIC_ID = Pattern.compile("[1-9][0-9]{0,31}");
     private static final Pattern VIDEO_PATH = Pattern.compile("^/video/(BV[A-Za-z0-9]{10}|av[1-9][0-9]{0,18})(?:/|$)");
@@ -60,11 +65,14 @@ public final class BilibiliApi {
         this.apiOrigin = apiOrigin;
     }
 
-    /** 一条消息含多个短链时读取第一个；短链的分享参数不传递到视频接口。 */
+    /** 入口与解析器使用相同识别规则，避免长链接被消息分发遗漏。 */
+    public static boolean hasVideoLink(String content) {
+        return content != null && VIDEO_LINK.matcher(content).find();
+    }
+
+    /** 读取消息中第一个视频链接；长链接直接提取 BV/AV，短链保持原有跳转流程。 */
     public BilibiliVideo parse(String content) throws IOException, InterruptedException {
-        Matcher link = SHORT_LINK.matcher(content);
-        if (!link.find()) throw new IOException("未找到有效的 B 站视频短链接");
-        ResolvedVideo target = resolveVideo(URI.create("https://b23.tv/" + link.group(1)));
+        ResolvedVideo target = resolveVideo(videoLinkIn(content));
         String videoId = target.id;
         String parameter = videoId.startsWith("BV") ? "bvid=" + videoId : "aid=" + videoId.substring(2);
         JsonObject data = fetchVideoData(parameter);
@@ -93,6 +101,14 @@ public final class BilibiliApi {
         return new BilibiliVideo(title, cover.toASCIIString(), size[0], size[1], uploaderName, uploaderId,
                 count(statistics, "like"), count(statistics, "reply"),
                 count(statistics, "favorite"), count(statistics, "share"), playerUrl);
+    }
+
+    static URI videoLinkIn(String content) throws IOException {
+        Matcher link = VIDEO_LINK.matcher(content == null ? "" : content);
+        if (!link.find()) throw new IOException("未找到有效的 B 站视频链接");
+        URI uri = URI.create(link.group());
+        // 短链分享参数沿用原有处理方式，不带入重定向请求。
+        return "b23.tv".equals(uri.getHost()) ? URI.create("https://b23.tv" + uri.getPath()) : uri;
     }
 
     /**

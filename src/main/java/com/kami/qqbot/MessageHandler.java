@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   ttdm &lt;玩家名&gt;   -> 最近一局 TDM 对局卡
  *   att &lt;玩家名&gt;    -> 最近一局 ATT 对局卡
  *   &lt;泰坦中文&gt;排行榜 -> 该泰坦命均/时长榜
- *   含 https://b23.tv/ -> B 站视频封面、标题、UP 和统计
+ *   含 B 站视频短链或 BV/AV 长链接 -> B 站视频封面、标题、UP 和统计
  *   含 https://space.bilibili.com/ -> 头像、昵称、粉丝、投稿视频数和最新动态链接
  * 群消息会 @ 发送者（单聊不 @）。
  */
@@ -132,7 +132,7 @@ public class MessageHandler implements AutoCloseable {
 
         if (githubCards.onMessage(d, messagesPath, filesPath, content)) return;
 
-        if (content.contains("https://b23.tv/")) {
+        if (BilibiliApi.hasVideoLink(content)) {
             replyBilibili(messagesPath, atOpenid, msgId, content);
             return;
         }
@@ -428,7 +428,7 @@ public class MessageHandler implements AutoCloseable {
                 + "- `ttdm 玩家名` — 最近一局 TDM 对局\n"
                 + "- `att 玩家名` — 最近一局 ATT 对局\n"
                 + "- `官网` — 常用站点导航\n"
-                + "- 分享 B 站视频短链接（`https://b23.tv/`）— 封面、标题、UP 与统计\n"
+                + "- 分享 B 站视频链接（b23.tv 短链、BV/AV 长链接）— 封面、标题、UP 与统计\n"
                 + "- 分享 B 站主页链接（`https://space.bilibili.com/UID`）— 头像、粉丝、上传视频与最新动态\n"
                 + "- 分享 GitHub 仓库链接 — 所有者、贡献者、构建结果与完整 README 图片卡片\n"
                 + "- `泰坦排行榜` — 该泰坦命均 & 时长榜（「泰坦」替换为下列之一）：\n"
