@@ -197,6 +197,50 @@ class BilibiliApiTest {
         assertTrue(cookieOn("/x/web-interface/wbi/view").contains("buvid3=" + BUVID3));
     }
 
+    @Test void parsesTheReportedDesktopShareWithoutPassingTrackingParameters() throws Exception {
+        String share = "【国内资源下载现状】 https://www.bilibili.com/video/BV13m42157ej/"
+                + "?share_source=copy_web&vd_source=89e568b3d48e215f4074afa7a0b9bdc7";
+        assertTrue(BilibiliApi.hasVideoLink(share));
+        BilibiliVideo video = api().parse(share);
+        assertEquals("https://player.bilibili.com/player.html?bvid=BV13m42157ej&autoplay=1", video.playerUrl());
+        String query = queryOn("/x/web-interface/wbi/view");
+        assertTrue(query.startsWith("bvid=BV13m42157ej&"));
+        assertFalse(query.contains("share_source"));
+        assertFalse(query.contains("vd_source"));
+    }
+
+    @Test void parsesMobileAvLinksAndPreservesTheSelectedPage() throws Exception {
+        BilibiliVideo video = api().parse("看看 [视频](https://m.bilibili.com/video/av170001?p=3&share_source=copy)\u2060\ufffc");
+        assertEquals("https://player.bilibili.com/player.html?aid=170001&autoplay=1&p=3", video.playerUrl());
+        assertTrue(queryOn("/x/web-interface/wbi/view").startsWith("aid=170001&"));
+    }
+
+    @Test void extractsTheFirstVideoAndKeepsShortLinksCompatible() throws Exception {
+        assertEquals(URI.create("https://b23.tv/abc123"), BilibiliApi.videoLinkIn(
+                "【分享】 https://b23.tv/abc123?share_source=copy https://www.bilibili.com/video/BV13m42157ej/"));
+        assertEquals(URI.create("https://bilibili.com/video/BV13m42157ej?p=2"), BilibiliApi.videoLinkIn(
+                "https://bilibili.com/video/BV13m42157ej?p=2，看看 https://b23.tv/abc123"));
+        assertTrue(BilibiliApi.hasVideoLink("https://www.bilibili.com/video/BV13m42157ej\u2060\ufffc"));
+    }
+
+    @Test void rejectsUnsupportedHostsPathsAndMalformedVideoIds() {
+        for (String content : List.of("https://space.bilibili.com/177826289",
+                "https://www.bilibili.com.evil.test/video/BV13m42157ej/",
+                "https://evil.test/video/BV13m42157ej/", "https://www.bilibili.com/video/BV13m42157ejX/",
+                "https://www.bilibili.com/video/BV123/", "https://bilibili.com/video/av0/")) {
+            assertFalse(BilibiliApi.hasVideoLink(content), content);
+            assertThrows(IOException.class, () -> BilibiliApi.videoLinkIn(content), content);
+        }
+        assertFalse(BilibiliApi.hasVideoLink(null));
+    }
+
+    @Test void rejectsInvalidPageBeforeRequestingVideoDetails() {
+        IOException error = assertThrows(IOException.class,
+                () -> api().parse("https://www.bilibili.com/video/BV13m42157ej/?p=0"));
+        assertEquals("视频分 P 编号无效", error.getMessage());
+        assertTrue(hits.isEmpty());
+    }
+
     private BilibiliApi api() {
         return new BilibiliApi(HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
