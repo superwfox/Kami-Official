@@ -430,7 +430,7 @@ public class MessageHandler implements AutoCloseable {
                 + "- `官网` — 常用站点导航\n"
                 + "- 分享 B 站视频链接（b23.tv 短链、BV/AV 长链接）— 封面、标题、UP 与统计\n"
                 + "- 分享 B 站主页链接（`https://space.bilibili.com/UID`）— 头像、粉丝、上传视频与最新动态\n"
-                + "- 分享 GitHub 仓库链接 — 所有者、贡献者、构建结果与完整 README 图片卡片\n"
+                + "- 分享 GitHub 仓库或个人主页链接 — 仓库卡片，或带简介、粉丝和同名 README 的用户卡片\n"
                 + "- `泰坦排行榜` — 该泰坦命均 & 时长榜（「泰坦」替换为下列之一）：\n"
                 + "  - 军团\n"
                 + "  - 浪人\n"

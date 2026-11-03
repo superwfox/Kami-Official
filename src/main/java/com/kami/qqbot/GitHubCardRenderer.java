@@ -70,6 +70,33 @@ public final class GitHubCardRenderer {
         }
     }
 
+    /** Same dark card as a repository. The README is the profile repository, or a short note when that repository 404s. */
+    public byte[] render(GitHubUser user, int requestedScale) throws Exception {
+        int scale = Math.max(1, Math.min(3, requestedScale));
+        Path images = Files.createTempDirectory("kami-readme-");
+        try {
+            String html = readmeHtml(user, images);
+            AtomicReference<byte[]> output = new AtomicReference<>();
+            AtomicReference<Exception> error = new AtomicReference<>();
+            Runnable paint = () -> {
+                try { output.set(renderUserDocument(user, html, scale)); }
+                catch (Exception e) { error.set(e); }
+            };
+            if (SwingUtilities.isEventDispatchThread()) paint.run(); else SwingUtilities.invokeAndWait(paint);
+            if (error.get() != null) throw error.get();
+            return output.get();
+        } finally {
+            try (var files = Files.walk(images)) {
+                for (Path file : files.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) Files.deleteIfExists(file);
+            }
+        }
+    }
+
+    String readmeHtml(GitHubUser user, Path images) throws Exception {
+        if (user.profileRepository != null) return documentHtml(user.profileRepository, images);
+        return "<html><head></head><body><p>" + GitHubUser.MISSING_PROFILE_README + "</p></body></html>";
+    }
+
     String documentHtml(GitHubRepository repository, Path images) throws Exception {
         String markdown = repository.readme;
         if (markdown.isBlank()) markdown = repository.description.isBlank()
@@ -506,6 +533,132 @@ public final class GitHubCardRenderer {
         }
         lines.add(line.toString()); return lines;
     }
+    private static final int AVATAR = 72, USER_TOP = 24;
+
+    private byte[] renderUserDocument(GitHubUser user, String html, int scale) throws Exception {
+        UserHeader header = userHeader(user);
+        JEditorPane pane = readmePane(html, BODY_WIDTH);
+        int documentHeight = pane.getHeight();
+        int height = Math.addExact(Math.addExact(header.bodyTop, documentHeight), 54);
+        BufferedImage canvas = new BufferedImage(Math.multiplyExact(WIDTH, scale), Math.multiplyExact(height, scale), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = canvas.createGraphics();
+        g.scale(scale, scale);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setColor(BG); g.fillRect(0, 0, WIDTH, height);
+        panel(g, 14, header.panelTop, WIDTH - 28, height - header.panelTop - 14, 14, new Color(0x292926));
+        drawUserHeader(g, user, header);
+        String label = user.profileRepository == null ? "README" : user.profileRepository.readmePath;
+        panel(g, 24, header.readmeTop, WIDTH - 48, height - header.readmeTop - 24, 11, PANEL);
+        text(g, label, 12, MUTED, BODY_X, header.readmeTop + 24);
+        Shape clip = g.getClip();
+        g.clip(new Rectangle(BODY_X, header.bodyTop, BODY_WIDTH, documentHeight));
+        g.translate(BODY_X, header.bodyTop); pane.paint(g); g.translate(-BODY_X, -header.bodyTop);
+        g.setClip(clip);
+        text(g, "github.com / " + user.login, 11, MUTED, BODY_X, height - 34);
+        g.dispose();
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); ImageIO.write(canvas, "png", bytes);
+        return bytes.toByteArray();
+    }
+
+    private static void drawUserHeader(Graphics2D g, GitHubUser user, UserHeader header) {
+        int textX = 30 + AVATAR + 16;
+        int baseline = USER_TOP + 32;
+        g.setFont(boldFont(32)); g.setColor(FG);
+        for (String line : header.nameLines) { g.drawString(line, textX, baseline); baseline += 40; }
+        if (header.showLogin) text(g, user.login, 16, MUTED, textX, baseline - 14);
+        roundAvatar(g, user.avatar, user.displayName(), 30, USER_TOP, AVATAR);
+        for (int i = 0; i < header.bioLines.size(); i++) text(g, header.bioLines.get(i), 15, new Color(0xccc8be), BODY_X, header.bioBaseline + i * 24);
+        for (int i = 0; i < header.metaLines.size(); i++) text(g, header.metaLines.get(i), 14, MUTED, BODY_X, header.metaBaseline + i * 22);
+        text(g, header.stats, 14, MUTED, 36, header.statsBaseline);
+        if (!header.joined.isBlank()) {
+            g.setFont(font(14));
+            int width = g.getFontMetrics().stringWidth(header.joined);
+            int x = header.joinedInline ? WIDTH - 36 - width : 36;
+            int y = header.joinedInline ? header.statsBaseline : header.statsBaseline + 22;
+            text(g, header.joined, 14, MUTED, x, y);
+        }
+    }
+
+    private static void roundAvatar(Graphics2D g, BufferedImage image, String login, int x, int y, int size) {
+        Shape clip = g.getClip();
+        g.clip(new RoundRectangle2D.Double(x, y, size, size, 16, 16));
+        g.setColor(new Color(0x4a493f)); g.fillRect(x, y, size, size);
+        if (image != null) g.drawImage(image, x, y, size, size, null);
+        else {
+            String initial = new String(Character.toChars(login.codePointAt(0))).toUpperCase(Locale.ROOT);
+            g.setFont(boldFont(28));
+            int width = g.getFontMetrics().stringWidth(initial);
+            g.setColor(FG);
+            g.drawString(initial, x + (size - width) / 2, y + size / 2 + 10);
+        }
+        g.setClip(clip);
+    }
+
+    private static UserHeader userHeader(GitHubUser user) {
+        BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        try { return new UserHeader(g, user); }
+        finally { g.dispose(); }
+    }
+
+    private static final class UserHeader {
+        final List<String> nameLines, bioLines, metaLines;
+        final boolean showLogin, joinedInline;
+        final String stats, joined;
+        final int panelTop, bioBaseline, metaBaseline, statsBaseline, readmeTop, bodyTop;
+
+        UserHeader(Graphics2D g, GitHubUser user) {
+            int textWidth = Math.max(40, WIDTH - (30 + AVATAR + 16) - 30);
+            g.setFont(boldFont(32));
+            nameLines = wrap(g.getFontMetrics(), flat(user.displayName()), textWidth);
+            showLogin = !user.login.equals(user.displayName());
+            int nameBlock = 36 + Math.max(0, nameLines.size() - 1) * 40 + (showLogin ? 26 : 0);
+            panelTop = USER_TOP + Math.max(AVATAR, nameBlock) + 14;
+            g.setFont(font(15));
+            String bio = flat(user.bio);
+            bioLines = bio.isBlank() ? List.of() : wrap(g.getFontMetrics(), bio, BODY_WIDTH);
+            g.setFont(font(14));
+            String meta = metaLine(user);
+            metaLines = meta.isBlank() ? List.of() : wrap(g.getFontMetrics(), meta, BODY_WIDTH);
+            stats = statsLine(user);
+            joined = joinedLine(user.createdAt);
+            int statsWidth = g.getFontMetrics().stringWidth(stats);
+            int joinedWidth = joined.isBlank() ? 0 : g.getFontMetrics().stringWidth(joined);
+            joinedInline = !joined.isBlank() && 36 + statsWidth + 28 + joinedWidth <= WIDTH - 36;
+            int cursor = panelTop + 28;
+            if (bioLines.isEmpty()) bioBaseline = -1;
+            else { bioBaseline = cursor + 4; cursor += bioLines.size() * 24; }
+            if (metaLines.isEmpty()) metaBaseline = -1;
+            else { cursor += 8; metaBaseline = cursor + 4; cursor += metaLines.size() * 22; }
+            cursor += 16;
+            statsBaseline = cursor;
+            cursor += 20;
+            if (!joinedInline && !joined.isBlank()) cursor += 22;
+            readmeTop = cursor + 8;
+            bodyTop = readmeTop + 44;
+        }
+    }
+
+    private static String flat(String value) { return value.replace('\n', ' ').replace('\r', ' ').strip(); }
+    private static String metaLine(GitHubUser user) {
+        List<String> parts = new ArrayList<>();
+        if (!user.location.isBlank()) parts.add(flat(user.location));
+        if (!user.company.isBlank()) parts.add(flat(user.company));
+        if (!user.blog.isBlank()) parts.add(flat(user.blog));
+        return String.join(" · ", parts);
+    }
+    private static String statsLine(GitHubUser user) {
+        String text = "仓库 " + compact(user.publicRepos) + " · 粉丝 " + compact(user.followers) + " · 关注 " + compact(user.following);
+        if (user.publicGists >= 0) text += " · Gist " + compact(user.publicGists);
+        return text;
+    }
+    private static String joinedLine(Instant created) {
+        if (created == null) return "";
+        return "加入于 " + DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.ofHours(8)).format(created);
+    }
+
     private static String compact(long value) { return value < 1000 ? Long.toString(value) : String.format(Locale.ROOT, "%.1f%s", value / (value >= 1_000_000 ? 1_000_000.0 : 1000.0), value >= 1_000_000 ? "m" : "k"); }
     private static String relativeTime(Instant committed, Instant now) {
         if (committed == null) return "暂无提交";

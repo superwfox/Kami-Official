@@ -21,6 +21,13 @@ class GitHubApiTest {
     private boolean empty, hiddenChecks, legacyFailure, privateRepo, organization;
     private int profileStatus = 200;
     private String profile = "{\"name\":\"演示昵称\"}";
+    private String userLogin;
+    private int userStatus = 200;
+    private String userBody = "{}";
+    private int orgStatus = 404;
+    private String orgBody = "{}";
+    private int profileRepoStatus = 404;
+    private boolean profileRepoPrivate;
 
     @BeforeEach void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -30,6 +37,12 @@ class GitHubApiTest {
             int status = 200; String body;
             if (path.equals("/repos/demo/project")) body = "{\"full_name\":\"demo/project\",\"default_branch\":\"main\",\"stargazers_count\":1001,\"archived\":true,\"private\":" + privateRepo + ",\"owner\":{\"login\":\"demo\",\"type\":\"" + (organization ? "Organization" : "User") + "\"}}";
             else if (path.equals("/users/demo") || path.equals("/orgs/demo")) { status = profileStatus; body = profile; }
+            else if (userLogin != null && path.equals("/users/" + userLogin)) { status = userStatus; body = userBody; }
+            else if (userLogin != null && path.equals("/orgs/" + userLogin)) { status = orgStatus; body = orgBody; }
+            else if (userLogin != null && path.equals("/repos/" + userLogin + "/" + userLogin)) {
+                if (profileRepoStatus != 200) { status = profileRepoStatus; body = "{}"; }
+                else body = "{\"full_name\":\"" + userLogin + "/" + userLogin + "\",\"default_branch\":\"main\",\"stargazers_count\":2,\"archived\":false,\"private\":" + profileRepoPrivate + ",\"description\":\"个人主页\",\"owner\":{\"login\":\"" + userLogin + "\",\"type\":\"User\"}}";
+            }
             else if (path.endsWith("/commits")) { status = empty ? 409 : 200; body = empty ? "{}" : "[{\"sha\":\"abcdef123456\",\"commit\":{\"committer\":{\"date\":\"2026-10-21T08:00:00Z\"}}}]"; }
             else if (path.endsWith("/readme")) body = "{\"path\":\"docs/README.md\",\"encoding\":\"base64\",\"content\":\"" + Base64.getEncoder().encodeToString(readme.getBytes(StandardCharsets.UTF_8)) + "\"}";
             else if (path.endsWith("/contributors")) {
@@ -103,23 +116,31 @@ class GitHubApiTest {
         assertEquals("https://raw.githubusercontent.com/demo/project/abcdef123456/docs/images/test.png", GitHubApi.imageUri(data, "images/test.png").toString());
         assertEquals("https://raw.githubusercontent.com/demo/project/abcdef123456/assets/test.png", GitHubApi.imageUri(data, "/assets/test.png").toString());
     }
-    @Test void personalProfileLinksResolveToTheirSameNameReadmeRepositoryInMessageOrder() {
+    @Test void personalProfileLinksStayUsersAndKeepMessageOrder() {
         for (String link : List.of("https://github.com/superwfox", "https://github.com/superwfox/",
                 "https://github.com/superwfox?tab=repositories", "<https://www.github.com/superwfox/#readme>",
-                "https://github.com/superwfox\u00a0末尾空格", "https://github.com/superwfox\u3000全角空格"))
-            assertEquals("superwfox/superwfox", GitHubApi.repositoryIn(link));
-        assertEquals("superwfox/superwfox", GitHubApi.repositoryIn("先看 https://github.com/superwfox 再看 https://github.com/demo/project"));
-        assertEquals("demo/project", GitHubApi.repositoryIn("先看 https://github.com/demo/project 再看 https://github.com/superwfox"));
-        for (String link : List.of("https://github.com/", "https://github.com/login", "https://github.com/features/actions",
-                "https://github.com/settings/profile", "https://github.com/demo/..", "https://github.com.attacker.example/demo"))
+                "https://github.com/superwfox\u00a0末尾空格", "https://github.com/superwfox\u3000全角空格")) {
             assertNull(GitHubApi.repositoryIn(link));
-        assertEquals("superwfox/superwfox", GitHubApi.repositoryIn("https://github.com/features https://github.com/superwfox"));
+            GitHubApi.Target target = GitHubApi.targetIn(link);
+            assertEquals("superwfox", target.login);
+            assertEquals("@superwfox", target.label());
+        }
+        assertEquals("@superwfox", GitHubApi.targetIn("先看 https://github.com/superwfox 再看 https://github.com/demo/project").label());
+        assertNull(GitHubApi.repositoryIn("先看 https://github.com/superwfox 再看 https://github.com/demo/project"));
+        assertEquals("demo/project", GitHubApi.repositoryIn("先看 https://github.com/demo/project 再看 https://github.com/superwfox"));
+        assertEquals("demo/project", GitHubApi.targetIn("先看 https://github.com/demo/project 再看 https://github.com/superwfox").label());
+        for (String link : List.of("https://github.com/", "https://github.com/login", "https://github.com/features/actions",
+                "https://github.com/settings/profile", "https://github.com/demo/..", "https://github.com.attacker.example/demo")) {
+            assertNull(GitHubApi.repositoryIn(link));
+            assertNull(GitHubApi.targetIn(link));
+        }
+        assertEquals("@superwfox", GitHubApi.targetIn("https://github.com/features https://github.com/superwfox").label());
     }
     @Test void qqInvisibleLinkSuffixesDoNotPreventRepositoryOrProfileDetection() {
         String[] suffixes = {"\u2060\uFFFC", "\u2060", "\uFFFC", "\u200B", "\u200C", "\u200D", "\uFEFF"};
         for (String suffix : suffixes) {
             assertEquals("R2Ion/Ion", GitHubApi.repositoryIn("https://github.com/R2Ion/Ion" + suffix));
-            assertEquals("superwfox/superwfox", GitHubApi.repositoryIn("https://github.com/superwfox" + suffix));
+            assertEquals("@superwfox", GitHubApi.targetIn("https://github.com/superwfox" + suffix).label());
         }
         assertNull(GitHubApi.repositoryIn("https://github.com\u2060.attacker.example/R2Ion/Ion"));
         assertEquals("R2Ion/Ion", GitHubApi.repositoryIn("https://github.com/R2Ion/Ion\u2060\uFFFC https://github.com/demo/project"));
@@ -131,6 +152,100 @@ class GitHubApiTest {
         retry.addProperty("run_attempt", 2);
         List<JsonObject> selected = GitHubApi.latestBuildRuns(List.of(old,retry,run(2,"Build","completed","success","other")),"sha");
         assertEquals(GitHubRepository.BuildState.FAILURE, GitHubApi.summarize(selected,"status","conclusion"));
+    }
+    @Test void missingRepositoryReportsTheRequestPathAndDoesNotAskForARetry() {
+        GitHubHttpException error = assertThrows(GitHubHttpException.class, () -> api().fetch("demo/missing"));
+        assertEquals(404, error.status);
+        assertEquals("repos/demo/missing", error.path);
+        assertEquals("GitHub 仓库或内容不存在，或没有访问权限", error.getMessage());
+        assertFalse(error.getMessage().contains("请稍后重试"));
+        assertEquals(error.getMessage(), GitHubCardHandler.failureMessage(error));
+    }
+    @Test void profileWithoutTheSpecialRepositoryStillReturnsTheUser() throws Exception {
+        userLogin = "southstar";
+        userBody = "{\"login\":\"southstar\",\"name\":\"南星\",\"bio\":\"hello\",\"company\":\"Kami\",\"blog\":\"https://example.com\",\"location\":\"Earth\",\"public_repos\":3,\"public_gists\":1,\"followers\":9,\"following\":2,\"created_at\":\"2020-01-02T00:00:00Z\"}";
+        GitHubApi api = api();
+        GitHubUser user = api.fetchUser("southstar");
+        assertEquals("southstar", user.login);
+        assertEquals("南星", user.displayName());
+        assertEquals("hello", user.bio);
+        assertEquals("Kami", user.company);
+        assertEquals("Earth", user.location);
+        assertEquals("https://example.com", user.blog);
+        assertEquals(3, user.publicRepos);
+        assertEquals(1, user.publicGists);
+        assertEquals(9, user.followers);
+        assertEquals(2, user.following);
+        assertEquals(Instant.parse("2020-01-02T00:00:00Z"), user.createdAt);
+        assertNull(user.profileRepository);
+        assertTrue(requests.contains("/users/southstar"));
+        assertTrue(requests.contains("/repos/southstar/southstar"));
+        assertFalse(requests.stream().anyMatch(value -> value.contains("/repos/southstar/southstar/commits")));
+        int calls = requests.size();
+        assertSame(user, api.fetchUser("southstar"));
+        assertEquals(calls, requests.size());
+    }
+    @Test void profileRepositoryReadmeIsKeptWhenTheSpecialRepositoryExists() throws Exception {
+        userLogin = "southstar";
+        userBody = "{\"login\":\"southstar\",\"name\":\"南星\",\"bio\":\"hello\",\"public_repos\":3,\"followers\":9,\"following\":2}";
+        profileRepoStatus = 200;
+        GitHubUser user = api().fetchUser("southstar");
+        assertNotNull(user.profileRepository);
+        assertEquals("southstar/southstar", user.profileRepository.fullName());
+        assertTrue(user.profileRepository.readme.contains("END_OF_README"));
+        assertEquals("docs/README.md", user.profileRepository.readmePath);
+    }
+    @Test void privateProfileRepositoryIsNotIncluded() {
+        userLogin = "southstar";
+        userBody = "{\"login\":\"southstar\",\"name\":\"南星\"}";
+        profileRepoStatus = 200;
+        profileRepoPrivate = true;
+        IOException error = assertThrows(IOException.class, () -> api().fetchUser("southstar"));
+        assertEquals("仅支持公开的 GitHub 仓库", error.getMessage());
+        assertFalse(GitHubCardHandler.failureMessage(error).contains("请稍后重试"));
+    }
+    @Test void profileRepositoryRateLimitStillFailsTheCard() {
+        userLogin = "southstar";
+        userBody = "{\"login\":\"southstar\",\"name\":\"南星\"}";
+        profileRepoStatus = 403;
+        GitHubHttpException error = assertThrows(GitHubHttpException.class, () -> api().fetchUser("southstar"));
+        assertEquals(403, error.status);
+        assertEquals("repos/southstar/southstar", error.path);
+        assertTrue(GitHubCardHandler.failureMessage(error).contains("请稍后重试"));
+    }
+    @Test void missingUserDoesNotFallThroughAfterANon404AndOrganizationProfileUsesDescription() throws Exception {
+        userLogin = "limited";
+        userStatus = 429;
+        GitHubHttpException limited = assertThrows(GitHubHttpException.class, () -> api().fetchUser("limited"));
+        assertEquals(429, limited.status);
+        assertEquals("users/limited", limited.path);
+        assertFalse(requests.contains("/orgs/limited"));
+        assertTrue(GitHubCardHandler.failureMessage(limited).contains("请稍后重试"));
+
+        userLogin = "acme";
+        userStatus = 404;
+        orgStatus = 200;
+        orgBody = "{\"login\":\"acme\",\"name\":\"Acme\",\"description\":\"做点东西\",\"public_repos\":4,\"followers\":8,\"following\":1,\"location\":\"Shanghai\"}";
+        profileRepoStatus = 404;
+        GitHubUser org = api().fetchUser("acme");
+        assertEquals("Acme", org.displayName());
+        assertEquals("做点东西", org.bio);
+        assertEquals(4, org.publicRepos);
+        assertEquals(8, org.followers);
+        assertEquals(-1, org.publicGists);
+        assertNull(org.profileRepository);
+        assertTrue(requests.contains("/orgs/acme"));
+    }
+    @Test void unknownAccountReportsNotFoundWithoutRetry() {
+        GitHubHttpException error = assertThrows(GitHubHttpException.class, () -> api().fetchUser("missing"));
+        assertEquals(404, error.status);
+        assertEquals("users/missing", error.path);
+        assertEquals("GitHub 用户不存在，或没有访问权限", error.getMessage());
+        assertFalse(error.getMessage().contains("请稍后重试"));
+        assertTrue(requests.contains("/users/missing"));
+        assertTrue(requests.contains("/orgs/missing"));
+        IOException invalid = assertThrows(IOException.class, () -> api().fetchUser("bad/name"));
+        assertEquals("无效的 GitHub 用户名", invalid.getMessage());
     }
     static GitHubRepository fixture(String markdown) {
         return new GitHubRepository("demo","演示作者","project","描述","main","abcdef123456",Instant.parse("2026-10-21T08:00:00Z"),1001,true,List.of(new GitHubRepository.Contributor("demo",null)),markdown,"docs/README.md",GitHubRepository.BuildState.SUCCESS,"Build",Instant.parse("2026-10-21T12:00:00Z"));
