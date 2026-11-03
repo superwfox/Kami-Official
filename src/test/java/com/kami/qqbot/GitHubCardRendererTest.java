@@ -1,6 +1,7 @@
 package com.kami.qqbot;
 
 import org.junit.jupiter.api.Test;
+import java.time.Instant;
 import org.junit.jupiter.api.io.TempDir;
 import javax.imageio.ImageIO;
 import java.io.ByteArrayInputStream;
@@ -152,6 +153,28 @@ class GitHubCardRendererTest {
             if(previousTop>=0)assertEquals(previousTop,top);
             previousRight=right;previousTop=top;
         }
+    }
+
+    @Test void userCardRendersWithOrWithoutTheSpecialRepositoryReadme() throws Exception {
+        GitHubCardRenderer renderer = new GitHubCardRenderer(null);
+        GitHubUser missing = sampleUser(null);
+        assertTrue(renderer.readmeHtml(missing, directory).contains(GitHubUser.MISSING_PROFILE_README));
+        BufferedImage missingImage = ImageIO.read(new ByteArrayInputStream(renderer.render(missing, 1)));
+        assertEquals(720, missingImage.getWidth());
+        assertTrue(missingImage.getHeight() > 240);
+
+        GitHubRepository repository = GitHubApiTest.fixture("# Profile README\n\nEND_USER_README");
+        GitHubUser present = sampleUser(repository);
+        String readme = renderer.readmeHtml(present, directory);
+        assertTrue(readme.contains("END_USER_README"));
+        assertFalse(readme.contains(GitHubUser.MISSING_PROFILE_README));
+        BufferedImage presentImage = ImageIO.read(new ByteArrayInputStream(renderer.render(present, 1)));
+        assertEquals(720, presentImage.getWidth());
+        assertTrue(presentImage.getHeight() > missingImage.getHeight());
+    }
+    private static GitHubUser sampleUser(GitHubRepository repository) {
+        return new GitHubUser("southstar", "南星", "写一点简介", "Kami", "Earth", "https://example.com",
+                3, 1, 9, 2, Instant.parse("2020-01-02T00:00:00Z"), Instant.parse("2026-10-21T12:00:00Z"), null, repository);
     }
 
     @Test void paragraphsAfterAShortFloatReturnToTheFullBodyWidth() throws Exception {

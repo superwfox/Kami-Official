@@ -26,6 +26,7 @@ public final class GitHubApi {
     private final String token;
     private final Clock clock;
     private final Map<String, GitHubRepository> cache = new LinkedHashMap<>();
+    private final Map<String, GitHubUser> users = new LinkedHashMap<>();
 
     public GitHubApi(String token) {
         this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NEVER).build(),
@@ -36,8 +37,21 @@ public final class GitHubApi {
         this.http = http; this.base = base; this.token = token; this.clock = clock;
     }
 
-    /** Repository links and personal profile links; profiles resolve to the same-name README repository. */
-    public static String repositoryIn(String text) {
+    /** First recognizable GitHub link. A profile stays a user and is not rewritten to login/login. */
+    public static final class Target {
+        public final String repository;
+        public final String login;
+
+        private Target(String repository, String login) {
+            this.repository = repository;
+            this.login = login;
+        }
+
+        public boolean user() { return login != null; }
+        public String label() { return user() ? "@" + login : repository; }
+    }
+
+    public static Target targetIn(String text) {
         String content = text == null ? "" : text;
         Matcher matcher = LINK.matcher(content);
         String repository = null;
@@ -54,9 +68,15 @@ public final class GitHubApi {
         Matcher profile = PROFILE_LINK.matcher(content);
         while (profile.find() && profile.start() < position) {
             String login = profile.group(1);
-            if (!SITE_ROUTES.contains(login.toLowerCase(Locale.ROOT))) return login + "/" + login;
+            if (!SITE_ROUTES.contains(login.toLowerCase(Locale.ROOT))) return new Target(null, login);
         }
-        return repository;
+        return repository == null ? null : new Target(repository, null);
+    }
+
+    /** Repository when that repository link comes first. Profile links return null. */
+    public static String repositoryIn(String text) {
+        Target target = targetIn(text);
+        return target == null || target.user() ? null : target.repository;
     }
 
     public GitHubRepository fetch(String fullName) throws IOException, InterruptedException {
@@ -173,6 +193,63 @@ public final class GitHubApi {
         return snapshot;
     }
 
+    /** User card data. A missing same-name README repository is empty content, not a failed card. */
+    public GitHubUser fetchUser(String login) throws IOException, InterruptedException {
+        if (login == null || !login.matches("[A-Za-z0-9][A-Za-z0-9-]{0,38}")) throw new IOException("无效的 GitHub 用户名");
+        synchronized (users) {
+            GitHubUser previous = users.get(login.toLowerCase(Locale.ROOT));
+            if (previous != null && Duration.between(previous.fetchedAt, clock.instant()).toMinutes() < 5) return previous;
+        }
+        JsonObject account = account(login);
+        String canonical = string(account, "login", login);
+        String bio = string(account, "bio", "");
+        if (bio.isBlank()) bio = string(account, "description", "");
+        String avatarUrl = string(account, "avatar_url", "");
+        long gists = account.has("public_gists") && !account.get("public_gists").isJsonNull()
+                ? jsonLong(account, "public_gists") : -1;
+        GitHubUser snapshot = new GitHubUser(canonical, string(account, "name", ""), bio,
+                string(account, "company", ""), string(account, "location", ""), string(account, "blog", ""),
+                Math.max(0, jsonLong(account, "public_repos")), gists,
+                Math.max(0, jsonLong(account, "followers")), Math.max(0, jsonLong(account, "following")),
+                instant(account, "created_at"), clock.instant(),
+                avatarUrl.isBlank() ? null : asset(avatarUrl + "&s=160"),
+                profileRepository(canonical));
+        synchronized (users) {
+            users.entrySet().removeIf(entry -> Duration.between(entry.getValue().fetchedAt, clock.instant()).toMinutes() >= 5);
+            if (users.size() >= 64) users.remove(users.keySet().iterator().next());
+            users.put(login.toLowerCase(Locale.ROOT), snapshot);
+            users.putIfAbsent(canonical.toLowerCase(Locale.ROOT), snapshot);
+        }
+        return snapshot;
+    }
+
+    private JsonObject account(String login) throws IOException, InterruptedException {
+        GitHubHttpException userMissing;
+        try {
+            return get("users/" + login).getAsJsonObject();
+        } catch (GitHubHttpException e) {
+            if (e.status != 404 || !("users/" + login).equals(e.path)) throw e;
+            userMissing = e;
+        }
+        try {
+            return get("orgs/" + login).getAsJsonObject();
+        } catch (GitHubHttpException e) {
+            if (e.status == 404) throw userMissing;
+            throw e;
+        }
+    }
+
+    /** 404 on the profile repository means there is no README to draw; other failures still surface. */
+    private GitHubRepository profileRepository(String login) throws IOException, InterruptedException {
+        String fullName = login + "/" + login;
+        try {
+            return fetch(fullName);
+        } catch (GitHubHttpException e) {
+            if (e.status == 404 && ("repos/" + fullName).equals(e.path)) return null;
+            throw e;
+        }
+    }
+
     static List<JsonObject> latestBuildRuns(List<JsonObject> runs, String sha) {
         Map<String, JsonObject> latest = new LinkedHashMap<>();
         for (JsonObject run : runs) {
@@ -271,9 +348,17 @@ public final class GitHubApi {
         HttpResponse<byte[]> response = http.send(request.GET().build(), HttpResponse.BodyHandlers.ofByteArray());
         int status = response.statusCode();
         if (status >= 200 && status < 300 || allowEmpty && status == 409) return response;
-        if (status == 404) throw new IOException("GitHub 仓库或内容不存在，或没有访问权限");
-        if (status == 403 || status == 429) throw new IOException("GitHub 暂时限流或无访问权限，请稍后重试");
-        throw new IOException("GitHub 请求失败，HTTP " + status);
+        if (status == 404) throw new GitHubHttpException(status, path, notFound(path));
+        if (status == 403 || status == 429) throw new GitHubHttpException(status, path, "GitHub 暂时限流或无访问权限，请稍后重试");
+        throw new GitHubHttpException(status, path, "GitHub 请求失败，HTTP " + status);
+    }
+    private static String notFound(String path) {
+        if (path.startsWith("users/") || path.startsWith("orgs/")) return "GitHub 用户不存在，或没有访问权限";
+        return "GitHub 仓库或内容不存在，或没有访问权限";
+    }
+    private static long jsonLong(JsonObject object, String key) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()) return 0;
+        try { return object.get(key).getAsLong(); } catch (RuntimeException e) { return 0; }
     }
     private static JsonArray array(JsonElement object, String key) {
         if (object == null || !object.isJsonObject()) return null;
